@@ -2230,6 +2230,15 @@ let manageDistKey = '';
       });
     });
   }
+  // Edits restored from localStorage (loadPendingEdits_) bypass recordPendingEdit_,
+  // and a fresh load replaces baseRows from the sheet. Replay those edits into the
+  // row model so they survive a later flush + re-render, just like live edits do.
+  function applyPendingEditsToModel_(){
+    if (!pendingEdits.size) return;
+    pendingEdits.forEach(entry => {
+      updateRowDataField_(entry.id, entry.field, entry.value);
+    });
+  }
   function buildPendingPayload_(){
     const byId = new Map();
     pendingEdits.forEach(entry => {
@@ -3758,6 +3767,7 @@ ${pagesHtml}
         vendors = data.vendors || [];
         categories = data.categories || [];
         rebuildAllRows_();
+        applyPendingEditsToModel_();
         syncGroupCollapsedDefaults_();
         const last = String(data.lastCompleted || '').trim();
         const initials = String(data.initials || '').trim().toUpperCase().replace(/[^A-Z]/g,'').slice(0,3);
