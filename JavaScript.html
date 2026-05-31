@@ -95,6 +95,11 @@ let pendingMeta = null;
 let pendingFlushInFlight = false;
 let pendingFlushQueue = [];
 let pendingRetryTimer = 0;
+const PENDING_RETRY_BASE_MS = 4000;
+const PENDING_RETRY_MAX_MS = 60000;
+let pendingRetryDelay = PENDING_RETRY_BASE_MS;
+let pendingFlushHalted = false; // stop auto-retry until the user acts (e.g. duplicate IDs)
+let localStorageWarned = false;
 let navPosSelection = new Set();
 let navPosLastRow = null;
 let navPosClipboard = null;
@@ -2158,10 +2163,20 @@ let manageDistKey = '';
   function persistPendingEdits_(){
     try{
       localStorage.setItem(PENDING_EDITS_KEY, JSON.stringify(Array.from(pendingEdits.values())));
-    }catch(e){ console.error('persistPendingEdits_:', e); }
+      localStorageWarned = false;
+    }catch(e){
+      console.error('persistPendingEdits_:', e);
+      if (!localStorageWarned){
+        localStorageWarned = true;
+        setBanner("error", "This device couldn't save your pending edits locally (storage full). Save to the server soon so nothing is lost.");
+      }
+    }
   }
   function recordPendingEdit_(id, field, value){
     if (!id || !field) return;
+    // A fresh edit is user activity — resume normal retry cadence.
+    pendingFlushHalted = false;
+    pendingRetryDelay = PENDING_RETRY_BASE_MS;
     const key = `${id}::${field}`;
     pendingEdits.set(key, {
       id: String(id),
@@ -2297,16 +2312,30 @@ let manageDistKey = '';
     google.script.run
       .withSuccessHandler(res => {
         if (res?.duplicateIds?.length){
+          // Retrying won't fix a duplicate ID in the sheet — halt the auto-retry
+          // loop and ask the user to fix it (a new edit or manual save resumes).
           setSavePill("err", "Blocked");
-          setBanner("warn", "Save blocked: Duplicate IDs in column M.\nDuplicate ID(s): " + res.duplicateIds.join(", "));
-          schedulePendingFlush_();
+          setBanner("warn", "Save paused: duplicate IDs in column M must be fixed in the sheet, then tap the save pill.\nDuplicate ID(s): " + res.duplicateIds.join(", "));
+          pendingFlushHalted = true;
           finalize(false, "Duplicate IDs in column M.");
           return;
         }
         if (res?.missingIds?.length){
+          // Those rows no longer exist — drop their pending edits so they can't
+          // jam the queue, then continue with whatever remains.
           setSavePill("err", "Missing ID");
-          setBanner("warn", "Could not find ID(s): " + res.missingIds.join(", "));
-          schedulePendingFlush_();
+          setBanner("warn", "Skipped item(s) no longer in the sheet: " + res.missingIds.join(", "));
+          res.missingIds.forEach(clearPendingStateForItem_);
+          payload.forEach(item => {
+            if (res.missingIds.some(m => String(m) === String(item.id))) return;
+            Object.keys(item).forEach(field => {
+              if (field === "id") return;
+              removePendingEdit_(item.id, field, item[field]);
+            });
+          });
+          pendingRetryDelay = PENDING_RETRY_BASE_MS;
+          updatePendingPill_();
+          if (pendingEdits.size) schedulePendingFlush_();
           finalize(false, "Missing ID(s).");
           return;
         }
@@ -2317,6 +2346,7 @@ let manageDistKey = '';
           });
         });
         setSavePill("ok", "Saved");
+        pendingRetryDelay = PENDING_RETRY_BASE_MS; // success: reset backoff
         updatePendingPill_();
         if (pendingEdits.size) schedulePendingFlush_();
         finalize(true);
@@ -2392,6 +2422,9 @@ let manageDistKey = '';
     }, mode === 'percent');
   }
   function quickSave_(){
+    // Manual save is an explicit user action — clear any halt and reset backoff.
+    pendingFlushHalted = false;
+    pendingRetryDelay = PENDING_RETRY_BASE_MS;
     if (!pendingCount_()) {
       setSavePill("ok", "Saved");
       return;
@@ -2408,12 +2441,18 @@ let manageDistKey = '';
   }
   function schedulePendingFlush_(){
     if (pendingRetryTimer) return;
+    if (pendingFlushHalted) return;
     if (!pendingCount_()) return;
+    const delay = pendingRetryDelay;
     pendingRetryTimer = window.setTimeout(() => {
       pendingRetryTimer = 0;
+      if (pendingFlushHalted) return;
       if (!pendingCount_()) return;
+      // Exponential backoff (capped) so a persistent failure doesn't hammer
+      // the server every few seconds.
+      pendingRetryDelay = Math.min(PENDING_RETRY_MAX_MS, Math.round(pendingRetryDelay * 1.8));
       flushPendingAll_(() => {}, () => {}, false);
-    }, 4000);
+    }, delay);
   }
   function confirmPrintSelection_(){
     const orderGuide = document.getElementById('printOrderGuideBox')?.checked;
@@ -7024,16 +7063,19 @@ function buildLeftNav_(){
       .withSuccessHandler(res => {
         if (res?.duplicateIds?.length){
           setSavePill("err", "Blocked");
-          setBanner("warn", "Autosave blocked: Duplicate IDs in column M.\nDuplicate ID(s): " + res.duplicateIds.join(", "));
+          setBanner("warn", "Save paused: duplicate IDs in column M must be fixed in the sheet, then tap the save pill.\nDuplicate ID(s): " + res.duplicateIds.join(", "));
+          pendingFlushHalted = true;
           return;
         }
         if (res?.missingIds?.length){
           setSavePill("err", "Missing ID");
-          setBanner("warn", "Could not find ID(s): " + res.missingIds.join(", "));
+          setBanner("warn", "Skipped item no longer in the sheet: " + res.missingIds.join(", "));
+          res.missingIds.forEach(clearPendingStateForItem_);
           return;
         }
         setBanner(null, null);
         setSavePill("ok", "Saved");
+        pendingRetryDelay = PENDING_RETRY_BASE_MS;
         inp.dataset.lastCommitted = next;
         removePendingEdit_(id, field, next);
         updatePendingPill_();
@@ -10405,6 +10447,14 @@ function buildLeftNav_(){
   loadPendingEdits_();
   loadPendingMeta_();
   updatePendingPill_();
+  // Warn before leaving if edits haven't reached the server yet (data safety).
+  window.addEventListener('beforeunload', (e) => {
+    if (pendingCount_() > 0) {
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
+    }
+  });
   updateRightTabStates_();
   document.addEventListener('keydown', handleGlobalKeyNav_);
   document.addEventListener('pointermove', handleAddSectionPointerMove_);
