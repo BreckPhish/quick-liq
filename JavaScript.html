@@ -35,6 +35,8 @@ let editModalState = null;
 let editModalSourceRow = null;
 let editModalSaveInFlight = false;
 let editModalSectionType = 'home';
+let deleteScopeItemId = '';
+let deleteScopeSectionKey = '';
 let sectionEditOpen = false;
 let sectionEditRow = null;
 let sectionEditOldLabel = "";
@@ -222,6 +224,14 @@ let manageDistKey = '';
   const TYPE_GROUP_NAME = 'BY BEVERAGE';
   const TYPE_GROUP_KEY = 'BY_TYPE';
   const TYPE_SECTION_PREFIX = 'TYPE_';
+  // ALL ITEMS is the canonical "home" — a parent group nesting the BY DISTRIBUTOR
+  // and BY BEVERAGE dynamic groups. Deleting an item from inside it removes the
+  // item from the system entirely. NEUTRAL_HOME_LABEL is the hidden parking
+  // section an item's sheet row is moved to when it is detached from every
+  // location group but must still exist (so it keeps showing under ALL ITEMS).
+  const ALL_ITEMS_GROUP_KEY = 'ALL_ITEMS';
+  const ALL_ITEMS_GROUP_NAME = 'ALL ITEMS';
+  const NEUTRAL_HOME_LABEL = 'ALL ITEMS';
   function norm_(s){ return String(s ?? '').toUpperCase().replace(/\s+/g,' ').trim(); }
   function normalizeDistributorName_(name){
     const raw = String(name || '').trim();
@@ -232,6 +242,17 @@ let manageDistKey = '';
   function isDistributorSectionKey_(key){
     const val = String(key || '').trim();
     return !!val && val.startsWith(DISTRIBUTOR_SECTION_PREFIX);
+  }
+  function isTypeSectionKey_(key){
+    const val = String(key || '').trim();
+    return !!val && val.startsWith(TYPE_SECTION_PREFIX);
+  }
+  // BY DISTRIBUTOR / BY BEVERAGE sections — the contents of the ALL ITEMS group.
+  function isDynamicHomeSectionKey_(key){
+    return isDistributorSectionKey_(key) || isTypeSectionKey_(key);
+  }
+  function isNeutralHomeLabel_(label){
+    return norm_(label) === norm_(NEUTRAL_HOME_LABEL);
   }
   function showPage_(page){
     const target = String(page || '').trim().toLowerCase();
@@ -3898,6 +3919,7 @@ ${pagesHtml}
       return 'home';
     };
     const home = (Array.isArray(baseSectionsMeta) ? baseSectionsMeta : [])
+      .filter(s => !isNeutralHomeLabel_(s?.heading || s?.label || ''))
       .map(s => Object.assign({}, s, { type: getType(s) }));
     const secondary = (Array.isArray(secondarySections) ? secondarySections : [])
       .map(s => ({
@@ -4012,17 +4034,29 @@ ${pagesHtml}
       currentLabel = '';
       currentType = 'home';
     };
+    let inNeutralHome = false;
     (Array.isArray(baseRows) ? baseRows : []).forEach(r => {
       if (!r) return;
       if (r.type === 'header') {
         flush();
+        const label = String(r.label || '');
+        // The neutral ALL ITEMS parking section is never rendered in the home
+        // flow; its items stay in baseRows so they still feed the dynamic
+        // (BY DISTRIBUTOR / BY BEVERAGE) sections, i.e. the ALL ITEMS group.
+        if (isNeutralHomeLabel_(label)) {
+          inNeutralHome = true;
+          currentHeader = null;
+          return;
+        }
+        inNeutralHome = false;
         const key = String(r.key || r.label || '').trim();
         const sectionType = (typeMap && key && String(typeMap[key] || '').toLowerCase() === 'secondary') ? 'secondary' : 'home';
         currentType = sectionType;
         currentKey = key;
-        currentLabel = String(r.label || '');
+        currentLabel = label;
         currentHeader = Object.assign({}, r, { sectionType });
       } else if (r.type === 'item') {
+        if (inNeutralHome) return;
         const item = Object.assign({}, r, { sectionType: currentType });
         currentItems.push(item);
       }
@@ -4496,16 +4530,21 @@ ${pagesHtml}
     const nameNorm = norm_(DISTRIBUTOR_GROUP_NAME);
     const typeNameNorm = norm_(TYPE_GROUP_NAME);
     const legacyTypeNameNorm = norm_('BY TYPE');
+    const allItemsNorm = norm_(ALL_ITEMS_GROUP_KEY);
+    const allItemsNameNorm = norm_(ALL_ITEMS_GROUP_NAME);
     const distributorExisting = base.find(g => norm_(getGroupKeyClient_(g)) === targetNorm);
     const typeExisting = base.find(g => norm_(getGroupKeyClient_(g)) === typeNorm || norm_(g?.name || g?.label || '') === typeNameNorm || norm_(g?.name || g?.label || '') === legacyTypeNameNorm);
+    const allItemsExisting = base.find(g => norm_(getGroupKeyClient_(g)) === allItemsNorm || norm_(g?.name || g?.label || '') === allItemsNameNorm);
     const filtered = base.filter(g => {
       const gKey = norm_(getGroupKeyClient_(g));
       const gName = norm_(g?.name || g?.label || '');
       return gKey !== targetNorm &&
         gKey !== typeNorm &&
+        gKey !== allItemsNorm &&
         gName !== nameNorm &&
         gName !== typeNameNorm &&
-        gName !== legacyTypeNameNorm;
+        gName !== legacyTypeNameNorm &&
+        gName !== allItemsNameNorm;
     });
     const distroGroup = mergeDynamicGroup_(distributorExisting, DISTRIBUTOR_GROUP_KEY, DISTRIBUTOR_GROUP_NAME, distroKeys);
     if (distroGroup) filtered.push(distroGroup);
@@ -4514,6 +4553,27 @@ ${pagesHtml}
       ? mergeDynamicGroup_(typeExisting, TYPE_GROUP_KEY, TYPE_GROUP_NAME, typeKeys)
       : null;
     if (typeGroup) filtered.push(typeGroup);
+    // Wrap the dynamic groups in an ALL ITEMS parent group (the canonical home).
+    const childKeys = [];
+    if (distroGroup) childKeys.push(DISTRIBUTOR_GROUP_KEY);
+    if (typeGroup) childKeys.push(TYPE_GROUP_KEY);
+    if (childKeys.length) {
+      const childSet = new Set(childKeys.map(norm_));
+      // The dynamic groups must be parented only by ALL ITEMS, so strip them
+      // from any other group's child list. Clone (don't mutate sectionGroups).
+      for (let i = 0; i < filtered.length; i++) {
+        const g = filtered[i];
+        if (!Array.isArray(g.groupKeys)) continue;
+        const next = g.groupKeys.filter(k => !childSet.has(norm_(k)));
+        if (next.length !== g.groupKeys.length) filtered[i] = Object.assign({}, g, { groupKeys: next });
+      }
+      const allItems = allItemsExisting ? Object.assign({}, allItemsExisting) : {};
+      allItems.key = ALL_ITEMS_GROUP_KEY;
+      allItems.name = String(allItems.name || ALL_ITEMS_GROUP_NAME);
+      allItems.sectionKeys = Array.isArray(allItems.sectionKeys) ? allItems.sectionKeys.slice() : [];
+      allItems.groupKeys = childKeys.slice();
+      filtered.push(allItems);
+    }
     return filtered;
   }
   function buildGroupMaps_(blocks){
@@ -7375,9 +7435,23 @@ function buildLeftNav_(){
     if (!id) return;
     const item = findItemById_(id);
     const name = item?.b ? ` "${item.b}"` : '';
-    const ok = window.confirm(`Delete item${name} (ID ${id})? This cannot be undone.`);
-    if (!ok) return;
+    // Which section/group was the delete triggered from?
+    const sourceRow = (editModalSourceRow && editModalSourceRow.getAttribute)
+      ? editModalSourceRow
+      : document.querySelector(`.itemRow[data-id="${cssEscape_(id)}"]`);
+    const sectionKey = sourceRow ? String(sourceRow.getAttribute('data-section-key') || '').trim() : '';
     closeEditModal();
+    // Inside ALL ITEMS (BY DISTRIBUTOR / BY BEVERAGE) -> full removal from the system.
+    if (isDynamicHomeSectionKey_(sectionKey)) {
+      const ok = window.confirm(`Delete item${name} (ID ${id}) from the entire system? This removes it from the spreadsheet and every group, and cannot be undone.`);
+      if (!ok) return;
+      performFullItemDelete_(id);
+      return;
+    }
+    // Anywhere else -> let the user choose the scope.
+    openDeleteItemScopeModal_(id, name, sectionKey);
+  }
+  function performFullItemDelete_(id){
     setStatus(`Deleting item ${id}…`);
     setSavePill("saving","Deleting…");
     setBanner(null, null);
@@ -7395,9 +7469,19 @@ function buildLeftNav_(){
         }
         setSavePill("ok","Deleted");
         setStatus(`Deleted item ${id}.`);
+        // Drop it from the base data too so the dynamic groups stop showing it.
+        baseRows = (baseRows || []).filter(r => !(r?.type === 'item' && String(r.id || '') === String(id)));
+        const appearancesChanged = stripItemFromAllAppearances_(id);
+        rebuildAllRows_();
         removeItemFromAllRows_(id);
         buildRightNav_();
         applyFilter();
+        if (appearancesChanged) {
+          google.script.run
+            .withSuccessHandler(() => {})
+            .withFailureHandler(() => {})
+            .saveUiSettings(uiSettings);
+        }
       })
       .withFailureHandler(err => {
         setSavePill("err","Error");
@@ -7405,6 +7489,150 @@ function buildLeftNav_(){
         setStatus("");
       })
       .deleteInventItem({ id });
+  }
+  // Remove every shortcut/secondary appearance of an item from local UI state.
+  function stripItemFromAllAppearances_(id){
+    const target = String(id || '');
+    let changed = false;
+    const map = (sectionShortcuts && typeof sectionShortcuts === 'object') ? sectionShortcuts : {};
+    Object.keys(map).forEach(key => {
+      const list = Array.isArray(map[key]) ? map[key] : [];
+      const next = list.filter(x => String(x) !== target);
+      if (next.length !== list.length) { changed = true; if (next.length) map[key] = next; else delete map[key]; }
+    });
+    if (changed) syncShortcutsFromMap_(map);
+    let secChanged = false;
+    (secondarySections || []).forEach(sec => {
+      if (!Array.isArray(sec.itemIds)) return;
+      const next = sec.itemIds.filter(x => String(x) !== target);
+      if (next.length !== sec.itemIds.length) { sec.itemIds = next; secChanged = true; }
+    });
+    if (secChanged) {
+      uiSettings = uiSettings && typeof uiSettings === 'object' ? uiSettings : {};
+      uiSettings.secondarySections = secondarySections;
+    }
+    return changed || secChanged;
+  }
+  function persistAppearanceSettings_(onDone){
+    setSavePill("saving","Saving…");
+    setBanner(null, null);
+    google.script.run
+      .withSuccessHandler(() => { setSavePill("ok","Saved"); if (onDone) onDone(); })
+      .withFailureHandler(err => {
+        setSavePill("err","Error");
+        setBanner("error", "Save error: " + (err && err.message ? err.message : err));
+      })
+      .saveUiSettings(uiSettings);
+  }
+  function openDeleteItemScopeModal_(id, name, sectionKey){
+    deleteScopeItemId = String(id || '');
+    deleteScopeSectionKey = String(sectionKey || '');
+    const info = document.getElementById('deleteItemScopeInfo');
+    if (info) {
+      info.textContent = `Remove item${name} (ID ${id})? It stays in BY DISTRIBUTOR & BY BEVERAGE unless you delete it from there.`;
+    }
+    const ov = document.getElementById('deleteItemScopeOverlay');
+    if (ov) ov.classList.add('active');
+  }
+  function closeDeleteItemScopeModal_(){
+    const ov = document.getElementById('deleteItemScopeOverlay');
+    if (ov) ov.classList.remove('active');
+    deleteScopeItemId = '';
+    deleteScopeSectionKey = '';
+  }
+  function deleteItemScopeOverlayClick(e){
+    if (e.target === e.currentTarget) closeDeleteItemScopeModal_();
+  }
+  function confirmDeleteItemScope_(scope){
+    const id = deleteScopeItemId;
+    const sectionKey = deleteScopeSectionKey;
+    closeDeleteItemScopeModal_();
+    if (!id) return;
+    if (scope === 'current') removeItemFromCurrentGroup_(id, sectionKey);
+    else if (scope === 'allButDynamic') removeItemFromAllButDynamic_(id);
+  }
+  function removeItemFromCurrentGroup_(id, sectionKey){
+    const key = String(sectionKey || '').trim();
+    const target = String(id || '');
+    // Shortcut appearance inside another home section.
+    const map = (sectionShortcuts && typeof sectionShortcuts === 'object') ? sectionShortcuts : {};
+    if (key && Array.isArray(map[key]) && map[key].some(x => String(x) === target)) {
+      const next = map[key].filter(x => String(x) !== target);
+      if (next.length) map[key] = next; else delete map[key];
+      syncShortcutsFromMap_(map);
+      finishLocalAppearanceChange_(id, `Removed item ${id} from this group.`);
+      return;
+    }
+    // Secondary-section membership.
+    const sec = (secondarySections || []).find(s => String(s.key || '') === key);
+    if (sec && Array.isArray(sec.itemIds) && sec.itemIds.some(x => String(x) === target)) {
+      sec.itemIds = sec.itemIds.filter(x => String(x) !== target);
+      uiSettings = uiSettings && typeof uiSettings === 'object' ? uiSettings : {};
+      uiSettings.secondarySections = secondarySections;
+      finishLocalAppearanceChange_(id, `Removed item ${id} from this group.`);
+      return;
+    }
+    // Otherwise this is the item's real home (or a standalone item on the main
+    // page): detach it by parking the row in the neutral ALL ITEMS home.
+    parkItemInNeutralHome_(id, { stripOthers: false });
+  }
+  function removeItemFromAllButDynamic_(id){
+    // Strip every shortcut/secondary appearance, then park the home row in the
+    // neutral ALL ITEMS section so the item only remains in the dynamic groups.
+    parkItemInNeutralHome_(id, { stripOthers: true });
+  }
+  function parkItemInNeutralHome_(id, opts){
+    const stripOthers = !!(opts && opts.stripOthers);
+    setStatus(`Updating item ${id}…`);
+    setSavePill("saving","Saving…");
+    setBanner(null, null);
+    google.script.run
+      .withSuccessHandler(res => {
+        if (res?.duplicateIds?.length){
+          setSavePill("err", "Blocked");
+          setBanner("warn", "Update blocked: Duplicate IDs in column M.\nDuplicate ID(s): " + res.duplicateIds.join(", "));
+          return;
+        }
+        if (res?.missingIds?.length){
+          setSavePill("err", "Missing ID");
+          setBanner("warn", "Could not find ID(s): " + res.missingIds.join(", "));
+          return;
+        }
+        // Reflect the home move in local data.
+        updateRowSectionLocal_(id, NEUTRAL_HOME_LABEL);
+        if (stripOthers) stripItemFromAllAppearances_(id);
+        rebuildAllRows_();
+        const finalize = () => {
+          setSavePill("ok","Saved");
+          setStatus(stripOthers
+            ? `Removed item ${id} from all but BY DISTRIBUTOR & BY BEVERAGE.`
+            : `Removed item ${id} from this group.`);
+          buildRightNav_();
+          applyFilter();
+        };
+        // Persist the appearance changes (shortcuts/secondary) if any.
+        persistAppearanceSettings_(finalize);
+      })
+      .withFailureHandler(err => {
+        setSavePill("err","Error");
+        setBanner("error", "Update error: " + (err && err.message ? err.message : err));
+        setStatus("");
+      })
+      .removeInventItemFromHome({ id });
+  }
+  function updateRowSectionLocal_(id, sectionLabel){
+    const target = String(id || '');
+    const label = String(sectionLabel || '');
+    (baseRows || []).forEach(r => {
+      if (r && r.type === 'item' && String(r.id || '') === target) r.section = label;
+    });
+  }
+  function finishLocalAppearanceChange_(id, message){
+    rebuildAllRows_();
+    buildRightNav_();
+    applyFilter();
+    setStatus(message || '');
+    persistAppearanceSettings_();
   }
   function openSectionEditModal_(row, label, key, type){
     if (blockLayoutInput_('edit sections')) return;

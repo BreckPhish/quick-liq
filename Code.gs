@@ -4210,6 +4210,59 @@ function deleteInventItem(payload) {
   }
 }
 
+// Neutral "ALL ITEMS" parking section: where an item's row is moved when it is
+// detached from every location group but must still exist (so it keeps showing
+// in the BY DISTRIBUTOR / BY BEVERAGE dynamic groups under ALL ITEMS).
+const ALL_ITEMS_SECTION_LABEL = 'ALL ITEMS';
+
+function removeInventItemFromHome(payload) {
+  assertAuthorized_();
+  const id = String(payload?.id || '').trim();
+  if (!id) throw new Error('Item ID is required.');
+
+  const ss = getSpreadsheet_();
+  const sheet = ss.getSheetByName(CONFIG.INVENT_SHEET);
+  if (!sheet) throw new Error(`Missing sheet: ${CONFIG.INVENT_SHEET}`);
+
+  const scanWidth = Math.max(CONFIG.COL.NOTES, 18);
+  const lock = getLock_();
+  if (lock) lock.waitLock(CONFIG.LOCK_WAIT_MS);
+
+  try {
+    const readCols = () => {
+      const lastRow = sheet.getLastRow();
+      const colB = lastRow ? sheet.getRange(1, CONFIG.COL.COMMON_NAME, lastRow, 1).getDisplayValues().map(r => String(r[0] || '').trim()) : [];
+      const colId = lastRow ? sheet.getRange(1, CONFIG.COL.ID, lastRow, 1).getDisplayValues().map(r => String(r[0] || '').trim()) : [];
+      return { colB, colId };
+    };
+
+    let { colB, colId } = readCols();
+
+    // Ensure the neutral parking section exists.
+    if (findSectionHeaderRow_(colB, colId, ALL_ITEMS_SECTION_LABEL) === -1) {
+      insertHomeSectionRows_(sheet, [{ label: ALL_ITEMS_SECTION_LABEL }], scanWidth, colB, colId);
+      ({ colB, colId } = readCols());
+    }
+
+    // Locate the item row by ID.
+    let row = -1;
+    for (let r = 0; r < colId.length; r++) {
+      if (colId[r] === id) {
+        if (row !== -1) return { duplicateIds: [id] };
+        row = r + 1;
+      }
+    }
+    if (row === -1) return { missingIds: [id] };
+
+    const moveRes = moveInventRowToSection_(sheet, row, ALL_ITEMS_SECTION_LABEL, scanWidth);
+    if (!moveRes.ok) throw new Error(moveRes.message || 'Move failed.');
+
+    return { ok: true, id, section: ALL_ITEMS_SECTION_LABEL, moved: !!moveRes.moved };
+  } finally {
+    if (lock) lock.releaseLock();
+  }
+}
+
 function deleteInventSections(payload) {
   assertAuthorized_();
   const keys = Array.isArray(payload?.sectionKeys)

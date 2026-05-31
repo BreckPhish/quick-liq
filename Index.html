@@ -766,6 +766,21 @@
       </div>
     </div>
   </div>
+  <!-- DELETE ITEM SCOPE MODAL -->
+  <div id="deleteItemScopeOverlay" class="overlay" onclick="deleteItemScopeOverlayClick(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modalTitle">
+        <span>DELETE ITEM</span>
+        <button class="modalClose" onclick="closeDeleteItemScopeModal_()" data-btn-key="delete-item-scope-close" data-btn-rename="1">Close</button>
+      </div>
+      <div class="help" id="deleteItemScopeInfo" style="margin-top:0;"></div>
+      <div class="actions" style="flex-direction:column; align-items:stretch; gap:8px; margin-top:12px;">
+        <button class="primary" onclick="confirmDeleteItemScope_('current')" data-btn-key="delete-item-scope-current" data-btn-rename="1">Remove from this group only</button>
+        <button class="danger" onclick="confirmDeleteItemScope_('allButDynamic')" data-btn-key="delete-item-scope-all" data-btn-rename="1">Remove from all but BY DISTRIBUTOR &amp; BY BEVERAGE</button>
+        <button onclick="closeDeleteItemScopeModal_()" data-btn-key="delete-item-scope-cancel" data-btn-rename="1">Cancel</button>
+      </div>
+    </div>
+  </div>
   <!-- ADD ITEM MODAL -->
   <div id="addOverlay" class="overlay" onclick="addOverlayClick(event)">
     <div class="modal" onclick="event.stopPropagation()">
