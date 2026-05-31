@@ -7548,7 +7548,9 @@ function buildLeftNav_(){
         if (appearancesChanged) {
           google.script.run
             .withSuccessHandler(() => {})
-            .withFailureHandler(() => {})
+            .withFailureHandler(err => {
+              setBanner("warn", "Item deleted, but cleaning up its other appearances didn't save: " + (err && err.message ? err.message : err));
+            })
             .saveUiSettings(uiSettings);
         }
       })
