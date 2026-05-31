@@ -6589,6 +6589,13 @@ function buildLeftNav_(){
       enqueueLayoutMutation_((done, fail) => {
         google.script.run
           .withSuccessHandler(res => {
+            if (res && res.ok === false) {
+              setSavePill("err", "Error");
+              setBanner("warn", res.message || "Group nesting failed.");
+              refresh({ mode: 'spinner' });
+              fail();
+              return;
+            }
             if (res?.groups) {
               sectionGroups = res.groups;
               applyGroupMembershipRefresh_();
@@ -9193,6 +9200,12 @@ function buildLeftNav_(){
         if (parentChanged) {
           google.script.run
             .withSuccessHandler(res => {
+              if (res && res.ok === false) {
+                setSavePill("err", "Error");
+                setBanner("warn", res.message || "Group nesting failed.");
+                refresh({ mode: 'spinner' });
+                return;
+              }
               if (res?.groups) {
                 sectionGroups = res.groups;
                 rebuildGroupMetaCache_();

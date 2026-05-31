@@ -3662,29 +3662,32 @@ function setGroupParent(payload) {
   }
 
   const groups = getSectionGroups_();
-  const childExists = groups.some(g => norm_(g.key || g.name || '') === norm_(childKey));
+  const childExists = groups.some(g => normalizeGroupKey_(g.key || g.name || '') === childKey);
   if (!childExists) return { ok: false, message: 'Group not found.' };
   if (parentKey) {
-    const parentExists = groups.some(g => norm_(g.key || g.name || '') === norm_(parentKey));
+    const parentExists = groups.some(g => normalizeGroupKey_(g.key || g.name || '') === parentKey);
     if (!parentExists) return { ok: false, message: 'Parent group not found.' };
   }
 
   let next = groups.map(g => Object.assign({}, g));
   next = next.map(g => {
     const keys = Array.isArray(g.groupKeys) ? g.groupKeys.slice() : [];
-    const filtered = keys.filter(k => norm_(k) !== norm_(childKey));
+    const filtered = keys.filter(k => normalizeGroupKey_(k) !== childKey);
     return (filtered.length !== keys.length) ? Object.assign({}, g, { groupKeys: filtered }) : g;
   });
 
   if (parentKey) {
-    const idx = next.findIndex(g => norm_(g.key || g.name || '') === norm_(parentKey));
+    const idx = next.findIndex(g => normalizeGroupKey_(g.key || g.name || '') === parentKey);
     const keys = Array.isArray(next[idx].groupKeys) ? next[idx].groupKeys.slice() : [];
-    if (!keys.some(k => norm_(k) === norm_(childKey))) {
+    if (!keys.some(k => normalizeGroupKey_(k) === childKey)) {
       keys.push(childKey);
       next[idx] = Object.assign({}, next[idx], { groupKeys: keys });
     }
+    // A cycle exists only if the parent is already a descendant of the child,
+    // i.e. the child can already reach the parent. Check that direction —
+    // checking parent->child would be trivially true since we just added that edge.
     const map = buildGroupChildrenMap_(next);
-    if (hasGroupPath_(map, parentKey, childKey)) {
+    if (hasGroupPath_(map, childKey, parentKey)) {
       return { ok: false, message: 'Group nesting creates a cycle.' };
     }
   }
