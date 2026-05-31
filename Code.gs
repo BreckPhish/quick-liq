@@ -1,5 +1,13 @@
 /*************************
  * TIN PLATE INVENT — WEBAPP
+ *
+ * Google Apps Script web app backing the Tin Plate beverage management portal.
+ * Bound to a Google Sheet, it serves a single-page UI (Index/Styles/JavaScript)
+ * for taking bar/restaurant beverage inventory and building distributor order
+ * guides. The script reads and writes the INVENT and ORDER sheets, persists UI
+ * customization (sections, groups, distributors, layout) to hidden settings
+ * sheets, and generates PDFs of the inventory count and order guides — which it
+ * can email to recipients or bundle into a downloadable ZIP.
  *************************/
 
 const CONFIG = {
