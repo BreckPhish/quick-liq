@@ -7456,6 +7456,25 @@ function buildLeftNav_(){
     // Anywhere else -> let the user choose the scope.
     openDeleteItemScopeModal_(id, name, sectionKey);
   }
+  // Drop any queued/pending autosave state for an item (used after a full
+  // delete) so a later flush doesn't try to save a row that no longer exists.
+  function clearPendingStateForItem_(id){
+    const prefix = `${String(id || '')}::`;
+    if (prefix === '::') return;
+    let changed = false;
+    Array.from(pendingEdits.keys()).forEach(key => {
+      if (key.startsWith(prefix)) { pendingEdits.delete(key); changed = true; }
+    });
+    Array.from(debounceTimers.keys()).forEach(key => {
+      if (!key.startsWith(prefix)) return;
+      clearTimeout(debounceTimers.get(key));
+      debounceTimers.delete(key);
+    });
+    Array.from(lastAutosaveInputs.keys()).forEach(key => {
+      if (key.startsWith(prefix)) lastAutosaveInputs.delete(key);
+    });
+    if (changed) { persistPendingEdits_(); updatePendingPill_(); }
+  }
   function performFullItemDelete_(id){
     setStatus(`Deleting item ${id}…`);
     setSavePill("saving","Deleting…");
@@ -7474,6 +7493,9 @@ function buildLeftNav_(){
         }
         setSavePill("ok","Deleted");
         setStatus(`Deleted item ${id}.`);
+        // The row is gone — drop any queued autosaves for it so a later flush
+        // doesn't report a false "Missing ID".
+        clearPendingStateForItem_(id);
         // Drop it from the base data too so the dynamic groups stop showing it.
         baseRows = (baseRows || []).filter(r => !(r?.type === 'item' && String(r.id || '') === String(id)));
         const appearancesChanged = stripItemFromAllAppearances_(id);
@@ -7588,6 +7610,17 @@ function buildLeftNav_(){
   }
   function parkItemInNeutralHome_(id, opts){
     const stripOthers = !!(opts && opts.stripOthers);
+    // Parking moves the row into the hidden ALL ITEMS home, where it only shows
+    // via the dynamic groups. An item with no distributor AND no category won't
+    // appear in either dynamic group, so it would vanish from the UI entirely.
+    const item = findItemById_(id);
+    const hasDistributor = !!normalizeDistributorName_(item?.vendor || item?.o || '');
+    const hasCategory = !!String(item?.categoryN || '').trim();
+    if (!hasDistributor && !hasCategory) {
+      setSavePill("err", "Blocked");
+      setBanner("warn", "This item has no distributor or beverage type, so removing it here would hide it from the app. Set one first, or fully delete it from BY DISTRIBUTOR / BY BEVERAGE.");
+      return;
+    }
     setStatus(`Updating item ${id}…`);
     setSavePill("saving","Saving…");
     setBanner(null, null);

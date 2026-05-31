@@ -425,7 +425,7 @@
       <div class="help" style="margin-top:0;">Deletes entire sections and all contained items. This cannot be undone.</div>
       <div id="deleteSectionsList" class="clearList"></div>
       <div class="actions">
-        <button class="danger" onclick="confirmDeleteSections_()" data-btn-key="delete-sections-confirm" data-btn-rename="1">Delete Selected</button>
+        <button class="danger" onclick="confirmDeleteSelectedSections_()" data-btn-key="delete-sections-confirm" data-btn-rename="1">Delete Selected</button>
         <button onclick="closeDeleteSectionsModal()" data-btn-key="delete-sections-cancel" data-btn-rename="1">Cancel</button>
       </div>
     </div>
@@ -666,21 +666,6 @@
       <div class="actions">
         <button class="primary" onclick="sendEmailSelection_()" data-btn-key="email-send" data-btn-rename="1">Send</button>
         <button onclick="closeEmailModal()" data-btn-key="email-discard" data-btn-rename="1">Discard</button>
-      </div>
-    </div>
-  </div>
-  <!-- DELETE SECTIONS MODAL -->
-  <div id="deleteSectionsOverlay" class="overlay" onclick="deleteSectionsOverlayClick(event)">
-    <div class="modal" onclick="event.stopPropagation()">
-      <div class="modalTitle">
-        <span>DELETE SECTIONS</span>
-        <button class="modalClose" onclick="closeDeleteSectionsModal()" data-btn-key="delete-sections-close" data-btn-rename="1">Close</button>
-      </div>
-      <div class="help" style="margin-top:0;">Select sections to delete. Removes the section header and items in INVENT.</div>
-      <div id="deleteSectionsList" class="clearList"></div>
-      <div class="actions">
-        <button class="danger" onclick="confirmDeleteSelectedSections_()" data-btn-key="delete-sections-confirm" data-btn-rename="1">Delete Selected</button>
-        <button onclick="closeDeleteSectionsModal()" data-btn-key="delete-sections-cancel" data-btn-rename="1">Cancel</button>
       </div>
     </div>
   </div>
