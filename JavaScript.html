@@ -254,6 +254,11 @@ let manageDistKey = '';
   function isNeutralHomeLabel_(label){
     return norm_(label) === norm_(NEUTRAL_HOME_LABEL);
   }
+  // ALL ITEMS and its dynamic children can't be deleted as groups.
+  function isProtectedGroupKey_(key){
+    const n = norm_(key || '');
+    return n === norm_(ALL_ITEMS_GROUP_KEY) || n === norm_(DISTRIBUTOR_GROUP_KEY) || n === norm_(TYPE_GROUP_KEY);
+  }
   function showPage_(page){
     const target = String(page || '').trim().toLowerCase();
     const map = {
@@ -9314,6 +9319,8 @@ function buildLeftNav_(){
       if (parentLocks.j) enableJEl.title = 'Disabled by parent group';
     }
     setGroupEditHideDisabledButton_(groupEditHideDisabled);
+    const delBtn = document.getElementById('groupEditDeleteBtn');
+    if (delBtn) delBtn.style.display = isProtectedGroupKey_(groupEditKey) ? 'none' : '';
     const el = document.getElementById('groupEditOverlay');
     if (el) el.style.display = 'flex';
     renderGroupLineList_(groupEditKey);
@@ -9337,6 +9344,41 @@ function buildLeftNav_(){
   }
   function groupEditOverlayClick(e){
     closeGroupEditModal();
+  }
+  function deleteGroupFromEdit_(){
+    const key = groupEditKey || '';
+    if (!key) return;
+    if (isProtectedGroupKey_(key)) {
+      setBanner('warn', 'This group cannot be deleted.');
+      return;
+    }
+    const name = groupEditOldName || key;
+    const ok = window.confirm(`Delete the group "${name}"? The sections inside it stay (their items are not deleted) and become ungrouped. This cannot be undone.`);
+    if (!ok) return;
+    closeGroupEditModal();
+    setSavePill('saving', 'Deleting…');
+    setBanner(null, null);
+    google.script.run
+      .withSuccessHandler(res => {
+        if (!res?.ok) {
+          setSavePill('err', 'Error');
+          setBanner('warn', res?.message || 'Group delete failed.');
+          return;
+        }
+        if (Array.isArray(res.groups)) sectionGroups = res.groups;
+        else sectionGroups = (sectionGroups || []).filter(g => norm_(getGroupKeyClient_(g)) !== norm_(key));
+        rebuildGroupMetaCache_();
+        syncGroupCollapsedDefaults_();
+        setSavePill('ok', 'Deleted');
+        setStatus(`Deleted group "${name}".`);
+        buildRightNav_();
+        applyFilter();
+      })
+      .withFailureHandler(err => {
+        setSavePill('err', 'Error');
+        setBanner('error', 'Group delete error: ' + (err && err.message ? err.message : err));
+      })
+      .deleteSectionGroup({ key });
   }
   function setGroupEditHideDisabledButton_(enabled){
     const btn = document.getElementById('groupEditHideDisabledBtn');
