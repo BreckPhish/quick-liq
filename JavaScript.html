@@ -4240,7 +4240,16 @@ ${pagesHtml}
     applyFilter();
     q.focus();
   }
+  // Debounce search input: typing rebuilds the list, so coalesce keystrokes to
+  // keep typing smooth on iPad instead of re-rendering on every character.
+  let filterDebounceTimer = 0;
+  function scheduleFilter_(){
+    clearTimeout(filterDebounceTimer);
+    filterDebounceTimer = window.setTimeout(() => { filterDebounceTimer = 0; applyFilter(); }, 160);
+  }
   function applyFilter(){
+    clearTimeout(filterDebounceTimer);
+    filterDebounceTimer = 0;
     const q = (document.getElementById("q").value || "").trim().toLowerCase();
     const hasQuery = !!q;
     if (hasQuery) {
