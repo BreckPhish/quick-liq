@@ -853,8 +853,8 @@ function getDistroDataSheet_() {
   let sheet = ss.getSheetByName(CONFIG.DISTRO_DATA_SHEET);
   if (!sheet) {
     sheet = ss.insertSheet(CONFIG.DISTRO_DATA_SHEET);
-    sheet.getRange(1, 1, 1, 10).setValues([[
-      'REF', 'NAME', 'KEY', 'SHEET', 'REP_NAME', 'REP_PHONE',
+    sheet.getRange(1, 1, 1, 11).setValues([[
+      'REF', 'NAME', 'KEY', 'SHEET', 'REP_NAME', 'REP_PHONE', 'REP_EMAIL',
       'ORDER_DAYS', 'TABLE_COUNT', 'TEMPLATE', 'TABLES_JSON'
     ]]);
     sheet.hideSheet();
@@ -933,15 +933,16 @@ function syncDistroDataSheet_(distributors) {
     String(d.sheetName || '').trim(),
     String(d.repName || '').trim(),
     String(d.repPhone || '').trim(),
+    String(d.repEmail || '').trim(),
     JSON.stringify(d.orderDays || {}),
     Number(d.tableCount || (d.tables || []).length || 0),
     String(d.templateSheet || '').trim(),
     JSON.stringify(d.tables || [])
   ]));
   const lastRow = Math.max(sheet.getLastRow(), 2);
-  sheet.getRange(2, 1, Math.max(1, lastRow - 1), 10).clearContent();
+  sheet.getRange(2, 1, Math.max(1, lastRow - 1), 11).clearContent();
   if (values.length) {
-    sheet.getRange(2, 1, values.length, 10).setValues(values);
+    sheet.getRange(2, 1, values.length, 11).setValues(values);
   }
 }
 
@@ -1122,6 +1123,7 @@ function autoCreateDistributorEntry_(vendorName, categories, uiSettings, opts) {
     name: nameRaw,
     repName: '',
     repPhone: '',
+    repEmail: '',
     orderDays: {},
     sheetName,
     templateSheet: templateSheet ? templateName : '',
@@ -3836,6 +3838,7 @@ function createDistributor(payload) {
     name: nameRaw,
     repName: String(payload?.repName || '').trim(),
     repPhone: String(payload?.repPhone || '').trim(),
+    repEmail: String(payload?.repEmail || '').trim(),
     orderDays,
     sheetName,
     templateSheet: templateName,
@@ -3906,6 +3909,7 @@ function updateDistributor(payload) {
   const orderDays = payload?.orderDays && typeof payload.orderDays === 'object' ? payload.orderDays : (current.orderDays || {});
   const repName = String(payload?.repName || current.repName || '').trim();
   const repPhone = String(payload?.repPhone || current.repPhone || '').trim();
+  const repEmail = String(payload?.repEmail || current.repEmail || '').trim();
 
   const ss = getSpreadsheet_();
   const lock = getLock_();
@@ -3957,7 +3961,8 @@ function updateDistributor(payload) {
       tables,
       orderDays,
       repName,
-      repPhone
+      repPhone,
+      repEmail
     });
 
     if (nameRaw && norm_(current.name || '') !== norm_(name)) {

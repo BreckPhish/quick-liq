@@ -635,6 +635,23 @@ let manageDistKey = '';
       if (subjectEl) subjectEl.value = 'Order Guide — Question';
       if (bodyEl) bodyEl.value = 'Attached order guide for reference/questions.';
     }
+    // Prefill recipients from distributor rep emails (only if empty, so we
+    // never overwrite what the user has typed).
+    const recipientsEl = document.getElementById('emailRecipients');
+    if (recipientsEl && !recipientsEl.value.trim()) {
+      const emails = collectRepEmails_();
+      if (emails.length) recipientsEl.value = emails.join(', ');
+    }
+  }
+  function collectRepEmails_(){
+    const set = new Set();
+    (distributors || []).forEach(d => {
+      String(d.repEmail || '').split(/[,;\s]+/).forEach(addr => {
+        const a = addr.trim();
+        if (a) set.add(a);
+      });
+    });
+    return Array.from(set);
   }
   function openPrintModal(){
     printModalOpen = true;
@@ -9641,9 +9658,11 @@ function buildLeftNav_(){
     const nameEl = document.getElementById('newDistributorName');
     const repEl = document.getElementById('newDistributorRepName');
     const phoneEl = document.getElementById('newDistributorRepPhone');
+    const emailEl = document.getElementById('newDistributorRepEmail');
     if (nameEl) nameEl.value = '';
     if (repEl) repEl.value = '';
     if (phoneEl) phoneEl.value = '';
+    if (emailEl) emailEl.value = '';
     document.querySelectorAll('#newDistributorOrderDays input[type="checkbox"]').forEach(cb => { cb.checked = false; });
     const tableCountEl = document.getElementById('newDistributorTableCount');
     if (tableCountEl) tableCountEl.value = '1';
@@ -9901,6 +9920,7 @@ function buildLeftNav_(){
     }
     const repName = (document.getElementById('newDistributorRepName')?.value || '').trim();
     const repPhone = (document.getElementById('newDistributorRepPhone')?.value || '').trim();
+    const repEmail = (document.getElementById('newDistributorRepEmail')?.value || '').trim();
     const templateSheet = document.getElementById('newDistributorTemplate')?.value || '';
     const orderDays = {};
     document.querySelectorAll('#newDistributorOrderDays input[type="checkbox"]').forEach(cb => {
@@ -9932,6 +9952,7 @@ function buildLeftNav_(){
         name,
         repName,
         repPhone,
+        repEmail,
         orderDays,
         tableCount,
         tableCategories,
@@ -9976,6 +9997,7 @@ function buildLeftNav_(){
           <div class="distributorMeta">
             Rep: ${escapeHtml(d.repName || '')}<br/>
             Phone: ${escapeHtml(d.repPhone || '')}<br/>
+            Email: ${escapeHtml(d.repEmail || '')}<br/>
             Order Days: ${escapeHtml(dayLabels || 'None')}<br/>
             Tables: ${escapeHtml(String(d.tableCount || (d.tables || []).length || ''))}<br/>
             ${tableLines || ''}
@@ -10026,12 +10048,14 @@ function buildLeftNav_(){
     const sheetEl = document.getElementById('manageDistributorSheetName');
     const repEl = document.getElementById('manageDistributorRepName');
     const phoneEl = document.getElementById('manageDistributorRepPhone');
+    const emailEl = document.getElementById('manageDistributorRepEmail');
     const refEl = document.getElementById('manageDistributorRef');
     const templateEl = document.getElementById('manageDistributorTemplate');
     if (nameEl) nameEl.value = '';
     if (sheetEl) sheetEl.value = '';
     if (repEl) repEl.value = '';
     if (phoneEl) phoneEl.value = '';
+    if (emailEl) emailEl.value = '';
     if (refEl) refEl.value = '';
     if (templateEl && templateEl.options.length) templateEl.value = templateEl.options[0].value;
     document.querySelectorAll('#manageDistributorOrderDays input[type="checkbox"]').forEach(cb => {
@@ -10106,12 +10130,14 @@ function buildLeftNav_(){
     const sheetEl = document.getElementById('manageDistributorSheetName');
     const repEl = document.getElementById('manageDistributorRepName');
     const phoneEl = document.getElementById('manageDistributorRepPhone');
+    const emailEl = document.getElementById('manageDistributorRepEmail');
     const refEl = document.getElementById('manageDistributorRef');
     const templateEl = document.getElementById('manageDistributorTemplate');
     if (nameEl) nameEl.value = dist.name || '';
     if (sheetEl) sheetEl.value = dist.sheetName || '';
     if (repEl) repEl.value = dist.repName || '';
     if (phoneEl) phoneEl.value = dist.repPhone || '';
+    if (emailEl) emailEl.value = dist.repEmail || '';
     if (refEl) refEl.value = dist.ref || '';
     if (templateEl) templateEl.value = dist.templateSheet || '';
     const days = dist.orderDays || {};
@@ -10212,6 +10238,7 @@ function buildLeftNav_(){
     const sheetName = (document.getElementById('manageDistributorSheetName')?.value || '').trim();
     const repName = (document.getElementById('manageDistributorRepName')?.value || '').trim();
     const repPhone = (document.getElementById('manageDistributorRepPhone')?.value || '').trim();
+    const repEmail = (document.getElementById('manageDistributorRepEmail')?.value || '').trim();
     const templateSheet = document.getElementById('manageDistributorTemplate')?.value || '';
     const orderDays = {};
     document.querySelectorAll('#manageDistributorOrderDays input[type="checkbox"]').forEach(cb => {
@@ -10244,7 +10271,8 @@ function buildLeftNav_(){
           })),
           orderDays,
           repName,
-          repPhone
+          repPhone,
+          repEmail
         });
         let replaced = false;
         const matchKey = norm_(manageDistKey || '');
@@ -10290,6 +10318,7 @@ function buildLeftNav_(){
         sheetName,
         repName,
         repPhone,
+        repEmail,
         orderDays,
         tableCount: manageDistWizard.tableCount,
         tableCategories,
