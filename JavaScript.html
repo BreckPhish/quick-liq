@@ -2143,8 +2143,29 @@ let manageDistKey = '';
       value: String(value ?? ""),
       ts: Date.now()
     });
+    // Keep the in-memory data model authoritative so the value survives any
+    // re-render (re-search, clearing the search, scrolling) even after the
+    // pending edit flushes to the sheet and leaves the pending map.
+    updateRowDataField_(id, field, value);
     persistPendingEdits_();
     updatePendingPill_();
+  }
+  function updateRowDataField_(id, field, value){
+    const target = String(id || '');
+    const key = String(field || '');
+    if (!target || !key) return;
+    const next = String(value ?? '');
+    // baseRows is the source of truth (it survives rebuildAllRows_); allRows
+    // holds the shallow copies that render() / applyFilter() actually read.
+    // Update both so the value persists across re-renders and rebuilds without
+    // re-fetching everything from the sheet.
+    [baseRows, allRows].forEach(list => {
+      (list || []).forEach(r => {
+        if (r && r.type === 'item' && String(r.id || '') === target) {
+          r[key] = next;
+        }
+      });
+    });
   }
   function removePendingEdit_(id, field, value){
     if (!id || !field) return;
