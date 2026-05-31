@@ -4090,9 +4090,18 @@ function addInventItem(payload) {
     const idVals = sheet.getRange(1, CONFIG.COL.ID, sheet.getLastRow(), 1).getDisplayValues()
       .map(r => String(r[0] || '').trim()).filter(Boolean);
 
+    // Monotonic IDs that are never recycled: deleting an item must not free its
+    // ID for reuse, or a stale in-flight edit could land on a different product.
+    // A persistent counter advances past deleted IDs; it self-seeds from the
+    // current max, so no migration is needed and manual sheet edits stay safe.
     const used = new Set(idVals.filter(v => /^\d+$/.test(v)).map(v => parseInt(v, 10)));
-    let nextId = 1;
+    let maxExisting = 0;
+    used.forEach(n => { if (n > maxExisting) maxExisting = n; });
+    const idProps = PropertiesService.getScriptProperties();
+    const storedNext = parseInt(idProps.getProperty('NEXT_ITEM_ID') || '0', 10) || 0;
+    let nextId = Math.max(maxExisting + 1, storedNext);
     while (used.has(nextId)) nextId++;
+    idProps.setProperty('NEXT_ITEM_ID', String(nextId + 1));
 
     const templateRow = findTemplateRowInSection_(sheet, headerRow, nextHeaderRow, newRow);
     if (templateRow) {
