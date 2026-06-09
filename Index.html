@@ -3,7 +3,7 @@
 <head>
   <base target="_top" />
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>TIN PLATE — INVENT</title>
   <?!= include('Styles') ?>
 </head>
@@ -15,7 +15,7 @@
         <span class="portalName">BEVERAGE MANAGEMENT PORTAL</span>
       </span>
       <div class="headerActions"></div>
-      <span id="savePill" class="pill">Idle</span>
+      <span id="savePill" class="pill" onclick="quickSave_()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();quickSave_();}" title="Save pending changes now" role="button" tabindex="0">Idle</span>
     </h1>
     <div class="headerRow">
       <div class="pageTabs">
@@ -75,7 +75,7 @@
       <div id="status" class="status"></div>
     </div>
     <div class="bottomBar">
-      <input id="q" type="text" placeholder="Search item name..." oninput="applyFilter()" />
+      <input id="q" type="text" placeholder="Search item name..." oninput="scheduleFilter_()" />
       <button class="smallBtn" style="min-width:120px;" onclick="clearSearch()" data-btn-key="search-clear" data-btn-rename="1">CLEAR</button>
     </div>
   </div>
@@ -225,6 +225,10 @@
           <div class="cell">
             <div class="label" style="justify-content:flex-start; text-align:left;">Representative Phone</div>
             <input id="manageDistributorRepPhone" type="text" inputmode="tel" />
+          </div>
+          <div class="cell">
+            <div class="label" style="justify-content:flex-start; text-align:left;">Representative Email</div>
+            <input id="manageDistributorRepEmail" type="email" inputmode="email" autocapitalize="off" autocomplete="off" />
           </div>
           <div class="cell">
             <div class="label" style="justify-content:flex-start; text-align:left;">Template Sheet</div>
@@ -425,7 +429,7 @@
       <div class="help" style="margin-top:0;">Deletes entire sections and all contained items. This cannot be undone.</div>
       <div id="deleteSectionsList" class="clearList"></div>
       <div class="actions">
-        <button class="danger" onclick="confirmDeleteSections_()" data-btn-key="delete-sections-confirm" data-btn-rename="1">Delete Selected</button>
+        <button class="danger" onclick="confirmDeleteSelectedSections_()" data-btn-key="delete-sections-confirm" data-btn-rename="1">Delete Selected</button>
         <button onclick="closeDeleteSectionsModal()" data-btn-key="delete-sections-cancel" data-btn-rename="1">Cancel</button>
       </div>
     </div>
@@ -586,6 +590,7 @@
       </div>
       <div class="actions">
         <button id="groupEditHideDisabledBtn" class="danger" onclick="toggleGroupEditHideDisabled_()" data-btn-key="group-hide-disabled" data-btn-rename="1">Hide Disabled Inputs</button>
+        <button id="groupEditDeleteBtn" class="danger" onclick="deleteGroupFromEdit_()" data-btn-key="group-delete" data-btn-rename="1">Delete Group</button>
         <button class="primary" onclick="saveGroupEditModal()" data-btn-key="group-save" data-btn-rename="1">Save</button>
         <button onclick="closeGroupEditModal()" data-btn-key="group-cancel" data-btn-rename="1">Cancel</button>
       </div>
@@ -665,21 +670,6 @@
       <div class="actions">
         <button class="primary" onclick="sendEmailSelection_()" data-btn-key="email-send" data-btn-rename="1">Send</button>
         <button onclick="closeEmailModal()" data-btn-key="email-discard" data-btn-rename="1">Discard</button>
-      </div>
-    </div>
-  </div>
-  <!-- DELETE SECTIONS MODAL -->
-  <div id="deleteSectionsOverlay" class="overlay" onclick="deleteSectionsOverlayClick(event)">
-    <div class="modal" onclick="event.stopPropagation()">
-      <div class="modalTitle">
-        <span>DELETE SECTIONS</span>
-        <button class="modalClose" onclick="closeDeleteSectionsModal()" data-btn-key="delete-sections-close" data-btn-rename="1">Close</button>
-      </div>
-      <div class="help" style="margin-top:0;">Select sections to delete. Removes the section header and items in INVENT.</div>
-      <div id="deleteSectionsList" class="clearList"></div>
-      <div class="actions">
-        <button class="danger" onclick="confirmDeleteSelectedSections_()" data-btn-key="delete-sections-confirm" data-btn-rename="1">Delete Selected</button>
-        <button onclick="closeDeleteSectionsModal()" data-btn-key="delete-sections-cancel" data-btn-rename="1">Cancel</button>
       </div>
     </div>
   </div>
@@ -763,6 +753,21 @@
         <button class="danger" id="editDeleteBtn" type="button" data-btn-key="item-delete" data-btn-rename="1">Delete</button>
         <button class="primary" onclick="saveEditModal()" data-btn-key="item-save" data-btn-rename="1">Save</button>
         <button onclick="closeEditModal()" data-btn-key="item-cancel" data-btn-rename="1">Cancel</button>
+      </div>
+    </div>
+  </div>
+  <!-- DELETE ITEM SCOPE MODAL -->
+  <div id="deleteItemScopeOverlay" class="overlay" onclick="deleteItemScopeOverlayClick(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modalTitle">
+        <span>DELETE ITEM</span>
+        <button class="modalClose" onclick="closeDeleteItemScopeModal_()" data-btn-key="delete-item-scope-close" data-btn-rename="1">Close</button>
+      </div>
+      <div class="help" id="deleteItemScopeInfo" style="margin-top:0;"></div>
+      <div class="actions" style="flex-direction:column; align-items:stretch; gap:8px; margin-top:12px;">
+        <button class="primary" onclick="confirmDeleteItemScope_('current')" data-btn-key="delete-item-scope-current" data-btn-rename="1">Remove from this group only</button>
+        <button class="danger" onclick="confirmDeleteItemScope_('allButDynamic')" data-btn-key="delete-item-scope-all" data-btn-rename="1">Remove from all but BY DISTRIBUTOR &amp; BY BEVERAGE</button>
+        <button onclick="closeDeleteItemScopeModal_()" data-btn-key="delete-item-scope-cancel" data-btn-rename="1">Cancel</button>
       </div>
     </div>
   </div>
@@ -1029,6 +1034,10 @@
           <div class="cell">
             <div class="label" style="justify-content:flex-start; text-align:left;">Representative Phone</div>
             <input id="newDistributorRepPhone" type="text" inputmode="tel" />
+          </div>
+          <div class="cell">
+            <div class="label" style="justify-content:flex-start; text-align:left;">Representative Email</div>
+            <input id="newDistributorRepEmail" type="email" inputmode="email" autocapitalize="off" autocomplete="off" />
           </div>
         </div>
         <div class="help" style="margin-top:10px;">Order by day</div>

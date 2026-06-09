@@ -35,6 +35,8 @@ let editModalState = null;
 let editModalSourceRow = null;
 let editModalSaveInFlight = false;
 let editModalSectionType = 'home';
+let deleteScopeItemId = '';
+let deleteScopeSectionKey = '';
 let sectionEditOpen = false;
 let sectionEditRow = null;
 let sectionEditOldLabel = "";
@@ -93,6 +95,11 @@ let pendingMeta = null;
 let pendingFlushInFlight = false;
 let pendingFlushQueue = [];
 let pendingRetryTimer = 0;
+const PENDING_RETRY_BASE_MS = 4000;
+const PENDING_RETRY_MAX_MS = 60000;
+let pendingRetryDelay = PENDING_RETRY_BASE_MS;
+let pendingFlushHalted = false; // stop auto-retry until the user acts (e.g. duplicate IDs)
+let localStorageWarned = false;
 let navPosSelection = new Set();
 let navPosLastRow = null;
 let navPosClipboard = null;
@@ -103,7 +110,7 @@ let layoutDropLineEl = null;
 let layoutMutationQueue = [];
 let layoutMutationInFlight = false;
 let pendingRightNavResync = false;
-const LAYOUT_DRAG_THRESHOLD = 6;
+const LAYOUT_DRAG_THRESHOLD = 12;
 const LAYOUT_SCROLL_MARGIN = 70;
 const LAYOUT_SCROLL_SPEED = 14;
   let rightButtonsInOrder = []; // right-nav entries, for alignment reference
@@ -222,6 +229,14 @@ let manageDistKey = '';
   const TYPE_GROUP_NAME = 'BY BEVERAGE';
   const TYPE_GROUP_KEY = 'BY_TYPE';
   const TYPE_SECTION_PREFIX = 'TYPE_';
+  // ALL ITEMS is the canonical "home" — a parent group nesting the BY DISTRIBUTOR
+  // and BY BEVERAGE dynamic groups. Deleting an item from inside it removes the
+  // item from the system entirely. NEUTRAL_HOME_LABEL is the hidden parking
+  // section an item's sheet row is moved to when it is detached from every
+  // location group but must still exist (so it keeps showing under ALL ITEMS).
+  const ALL_ITEMS_GROUP_KEY = 'ALL_ITEMS';
+  const ALL_ITEMS_GROUP_NAME = 'ALL ITEMS';
+  const NEUTRAL_HOME_LABEL = 'ALL ITEMS';
   function norm_(s){ return String(s ?? '').toUpperCase().replace(/\s+/g,' ').trim(); }
   function normalizeDistributorName_(name){
     const raw = String(name || '').trim();
@@ -232,6 +247,22 @@ let manageDistKey = '';
   function isDistributorSectionKey_(key){
     const val = String(key || '').trim();
     return !!val && val.startsWith(DISTRIBUTOR_SECTION_PREFIX);
+  }
+  function isTypeSectionKey_(key){
+    const val = String(key || '').trim();
+    return !!val && val.startsWith(TYPE_SECTION_PREFIX);
+  }
+  // BY DISTRIBUTOR / BY BEVERAGE sections — the contents of the ALL ITEMS group.
+  function isDynamicHomeSectionKey_(key){
+    return isDistributorSectionKey_(key) || isTypeSectionKey_(key);
+  }
+  function isNeutralHomeLabel_(label){
+    return norm_(label) === norm_(NEUTRAL_HOME_LABEL);
+  }
+  // ALL ITEMS and its dynamic children can't be deleted as groups.
+  function isProtectedGroupKey_(key){
+    const n = norm_(key || '');
+    return n === norm_(ALL_ITEMS_GROUP_KEY) || n === norm_(DISTRIBUTOR_GROUP_KEY) || n === norm_(TYPE_GROUP_KEY);
   }
   function showPage_(page){
     const target = String(page || '').trim().toLowerCase();
@@ -604,6 +635,23 @@ let manageDistKey = '';
       if (subjectEl) subjectEl.value = 'Order Guide — Question';
       if (bodyEl) bodyEl.value = 'Attached order guide for reference/questions.';
     }
+    // Prefill recipients from distributor rep emails (only if empty, so we
+    // never overwrite what the user has typed).
+    const recipientsEl = document.getElementById('emailRecipients');
+    if (recipientsEl && !recipientsEl.value.trim()) {
+      const emails = collectRepEmails_();
+      if (emails.length) recipientsEl.value = emails.join(', ');
+    }
+  }
+  function collectRepEmails_(){
+    const set = new Set();
+    (distributors || []).forEach(d => {
+      String(d.repEmail || '').split(/[,;\s]+/).forEach(addr => {
+        const a = addr.trim();
+        if (a) set.add(a);
+      });
+    });
+    return Array.from(set);
   }
   function openPrintModal(){
     printModalOpen = true;
@@ -2132,10 +2180,20 @@ let manageDistKey = '';
   function persistPendingEdits_(){
     try{
       localStorage.setItem(PENDING_EDITS_KEY, JSON.stringify(Array.from(pendingEdits.values())));
-    }catch(e){ console.error('persistPendingEdits_:', e); }
+      localStorageWarned = false;
+    }catch(e){
+      console.error('persistPendingEdits_:', e);
+      if (!localStorageWarned){
+        localStorageWarned = true;
+        setBanner("error", "This device couldn't save your pending edits locally (storage full). Save to the server soon so nothing is lost.");
+      }
+    }
   }
   function recordPendingEdit_(id, field, value){
     if (!id || !field) return;
+    // A fresh edit is user activity — resume normal retry cadence.
+    pendingFlushHalted = false;
+    pendingRetryDelay = PENDING_RETRY_BASE_MS;
     const key = `${id}::${field}`;
     pendingEdits.set(key, {
       id: String(id),
@@ -2143,8 +2201,29 @@ let manageDistKey = '';
       value: String(value ?? ""),
       ts: Date.now()
     });
+    // Keep the in-memory data model authoritative so the value survives any
+    // re-render (re-search, clearing the search, scrolling) even after the
+    // pending edit flushes to the sheet and leaves the pending map.
+    updateRowDataField_(id, field, value);
     persistPendingEdits_();
     updatePendingPill_();
+  }
+  function updateRowDataField_(id, field, value){
+    const target = String(id || '');
+    const key = String(field || '');
+    if (!target || !key) return;
+    const next = String(value ?? '');
+    // baseRows is the source of truth (it survives rebuildAllRows_); allRows
+    // holds the shallow copies that render() / applyFilter() actually read.
+    // Update both so the value persists across re-renders and rebuilds without
+    // re-fetching everything from the sheet.
+    [baseRows, allRows].forEach(list => {
+      (list || []).forEach(r => {
+        if (r && r.type === 'item' && String(r.id || '') === target) {
+          r[key] = next;
+        }
+      });
+    });
   }
   function removePendingEdit_(id, field, value){
     if (!id || !field) return;
@@ -2209,6 +2288,15 @@ let manageDistKey = '';
       });
     });
   }
+  // Edits restored from localStorage (loadPendingEdits_) bypass recordPendingEdit_,
+  // and a fresh load replaces baseRows from the sheet. Replay those edits into the
+  // row model so they survive a later flush + re-render, just like live edits do.
+  function applyPendingEditsToModel_(){
+    if (!pendingEdits.size) return;
+    pendingEdits.forEach(entry => {
+      updateRowDataField_(entry.id, entry.field, entry.value);
+    });
+  }
   function buildPendingPayload_(){
     const byId = new Map();
     pendingEdits.forEach(entry => {
@@ -2241,16 +2329,30 @@ let manageDistKey = '';
     google.script.run
       .withSuccessHandler(res => {
         if (res?.duplicateIds?.length){
+          // Retrying won't fix a duplicate ID in the sheet — halt the auto-retry
+          // loop and ask the user to fix it (a new edit or manual save resumes).
           setSavePill("err", "Blocked");
-          setBanner("warn", "Save blocked: Duplicate IDs in column M.\nDuplicate ID(s): " + res.duplicateIds.join(", "));
-          schedulePendingFlush_();
+          setBanner("warn", "Save paused: duplicate IDs in column M must be fixed in the sheet, then tap the save pill.\nDuplicate ID(s): " + res.duplicateIds.join(", "));
+          pendingFlushHalted = true;
           finalize(false, "Duplicate IDs in column M.");
           return;
         }
         if (res?.missingIds?.length){
+          // Those rows no longer exist — drop their pending edits so they can't
+          // jam the queue, then continue with whatever remains.
           setSavePill("err", "Missing ID");
-          setBanner("warn", "Could not find ID(s): " + res.missingIds.join(", "));
-          schedulePendingFlush_();
+          setBanner("warn", "Skipped item(s) no longer in the sheet: " + res.missingIds.join(", "));
+          res.missingIds.forEach(clearPendingStateForItem_);
+          payload.forEach(item => {
+            if (res.missingIds.some(m => String(m) === String(item.id))) return;
+            Object.keys(item).forEach(field => {
+              if (field === "id") return;
+              removePendingEdit_(item.id, field, item[field]);
+            });
+          });
+          pendingRetryDelay = PENDING_RETRY_BASE_MS;
+          updatePendingPill_();
+          if (pendingEdits.size) schedulePendingFlush_();
           finalize(false, "Missing ID(s).");
           return;
         }
@@ -2261,6 +2363,7 @@ let manageDistKey = '';
           });
         });
         setSavePill("ok", "Saved");
+        pendingRetryDelay = PENDING_RETRY_BASE_MS; // success: reset backoff
         updatePendingPill_();
         if (pendingEdits.size) schedulePendingFlush_();
         finalize(true);
@@ -2336,6 +2439,9 @@ let manageDistKey = '';
     }, mode === 'percent');
   }
   function quickSave_(){
+    // Manual save is an explicit user action — clear any halt and reset backoff.
+    pendingFlushHalted = false;
+    pendingRetryDelay = PENDING_RETRY_BASE_MS;
     if (!pendingCount_()) {
       setSavePill("ok", "Saved");
       return;
@@ -2352,12 +2458,18 @@ let manageDistKey = '';
   }
   function schedulePendingFlush_(){
     if (pendingRetryTimer) return;
+    if (pendingFlushHalted) return;
     if (!pendingCount_()) return;
+    const delay = pendingRetryDelay;
     pendingRetryTimer = window.setTimeout(() => {
       pendingRetryTimer = 0;
+      if (pendingFlushHalted) return;
       if (!pendingCount_()) return;
+      // Exponential backoff (capped) so a persistent failure doesn't hammer
+      // the server every few seconds.
+      pendingRetryDelay = Math.min(PENDING_RETRY_MAX_MS, Math.round(pendingRetryDelay * 1.8));
       flushPendingAll_(() => {}, () => {}, false);
-    }, 4000);
+    }, delay);
   }
   function confirmPrintSelection_(){
     const orderGuide = document.getElementById('printOrderGuideBox')?.checked;
@@ -3737,6 +3849,7 @@ ${pagesHtml}
         vendors = data.vendors || [];
         categories = data.categories || [];
         rebuildAllRows_();
+        applyPendingEditsToModel_();
         syncGroupCollapsedDefaults_();
         const last = String(data.lastCompleted || '').trim();
         const initials = String(data.initials || '').trim().toUpperCase().replace(/[^A-Z]/g,'').slice(0,3);
@@ -3867,6 +3980,7 @@ ${pagesHtml}
       return 'home';
     };
     const home = (Array.isArray(baseSectionsMeta) ? baseSectionsMeta : [])
+      .filter(s => !isNeutralHomeLabel_(s?.heading || s?.label || ''))
       .map(s => Object.assign({}, s, { type: getType(s) }));
     const secondary = (Array.isArray(secondarySections) ? secondarySections : [])
       .map(s => ({
@@ -3981,17 +4095,29 @@ ${pagesHtml}
       currentLabel = '';
       currentType = 'home';
     };
+    let inNeutralHome = false;
     (Array.isArray(baseRows) ? baseRows : []).forEach(r => {
       if (!r) return;
       if (r.type === 'header') {
         flush();
+        const label = String(r.label || '');
+        // The neutral ALL ITEMS parking section is never rendered in the home
+        // flow; its items stay in baseRows so they still feed the dynamic
+        // (BY DISTRIBUTOR / BY BEVERAGE) sections, i.e. the ALL ITEMS group.
+        if (isNeutralHomeLabel_(label)) {
+          inNeutralHome = true;
+          currentHeader = null;
+          return;
+        }
+        inNeutralHome = false;
         const key = String(r.key || r.label || '').trim();
         const sectionType = (typeMap && key && String(typeMap[key] || '').toLowerCase() === 'secondary') ? 'secondary' : 'home';
         currentType = sectionType;
         currentKey = key;
-        currentLabel = String(r.label || '');
+        currentLabel = label;
         currentHeader = Object.assign({}, r, { sectionType });
       } else if (r.type === 'item') {
+        if (inNeutralHome) return;
         const item = Object.assign({}, r, { sectionType: currentType });
         currentItems.push(item);
       }
@@ -4131,7 +4257,16 @@ ${pagesHtml}
     applyFilter();
     q.focus();
   }
+  // Debounce search input: typing rebuilds the list, so coalesce keystrokes to
+  // keep typing smooth on iPad instead of re-rendering on every character.
+  let filterDebounceTimer = 0;
+  function scheduleFilter_(){
+    clearTimeout(filterDebounceTimer);
+    filterDebounceTimer = window.setTimeout(() => { filterDebounceTimer = 0; applyFilter(); }, 160);
+  }
   function applyFilter(){
+    clearTimeout(filterDebounceTimer);
+    filterDebounceTimer = 0;
     const q = (document.getElementById("q").value || "").trim().toLowerCase();
     const hasQuery = !!q;
     if (hasQuery) {
@@ -4465,16 +4600,21 @@ ${pagesHtml}
     const nameNorm = norm_(DISTRIBUTOR_GROUP_NAME);
     const typeNameNorm = norm_(TYPE_GROUP_NAME);
     const legacyTypeNameNorm = norm_('BY TYPE');
+    const allItemsNorm = norm_(ALL_ITEMS_GROUP_KEY);
+    const allItemsNameNorm = norm_(ALL_ITEMS_GROUP_NAME);
     const distributorExisting = base.find(g => norm_(getGroupKeyClient_(g)) === targetNorm);
     const typeExisting = base.find(g => norm_(getGroupKeyClient_(g)) === typeNorm || norm_(g?.name || g?.label || '') === typeNameNorm || norm_(g?.name || g?.label || '') === legacyTypeNameNorm);
+    const allItemsExisting = base.find(g => norm_(getGroupKeyClient_(g)) === allItemsNorm || norm_(g?.name || g?.label || '') === allItemsNameNorm);
     const filtered = base.filter(g => {
       const gKey = norm_(getGroupKeyClient_(g));
       const gName = norm_(g?.name || g?.label || '');
       return gKey !== targetNorm &&
         gKey !== typeNorm &&
+        gKey !== allItemsNorm &&
         gName !== nameNorm &&
         gName !== typeNameNorm &&
-        gName !== legacyTypeNameNorm;
+        gName !== legacyTypeNameNorm &&
+        gName !== allItemsNameNorm;
     });
     const distroGroup = mergeDynamicGroup_(distributorExisting, DISTRIBUTOR_GROUP_KEY, DISTRIBUTOR_GROUP_NAME, distroKeys);
     if (distroGroup) filtered.push(distroGroup);
@@ -4483,6 +4623,27 @@ ${pagesHtml}
       ? mergeDynamicGroup_(typeExisting, TYPE_GROUP_KEY, TYPE_GROUP_NAME, typeKeys)
       : null;
     if (typeGroup) filtered.push(typeGroup);
+    // Wrap the dynamic groups in an ALL ITEMS parent group (the canonical home).
+    const childKeys = [];
+    if (distroGroup) childKeys.push(DISTRIBUTOR_GROUP_KEY);
+    if (typeGroup) childKeys.push(TYPE_GROUP_KEY);
+    if (childKeys.length) {
+      const childSet = new Set(childKeys.map(norm_));
+      // The dynamic groups must be parented only by ALL ITEMS, so strip them
+      // from any other group's child list. Clone (don't mutate sectionGroups).
+      for (let i = 0; i < filtered.length; i++) {
+        const g = filtered[i];
+        if (!Array.isArray(g.groupKeys)) continue;
+        const next = g.groupKeys.filter(k => !childSet.has(norm_(k)));
+        if (next.length !== g.groupKeys.length) filtered[i] = Object.assign({}, g, { groupKeys: next });
+      }
+      const allItems = allItemsExisting ? Object.assign({}, allItemsExisting) : {};
+      allItems.key = ALL_ITEMS_GROUP_KEY;
+      allItems.name = String(allItems.name || ALL_ITEMS_GROUP_NAME);
+      allItems.sectionKeys = Array.isArray(allItems.sectionKeys) ? allItems.sectionKeys.slice() : [];
+      allItems.groupKeys = childKeys.slice();
+      filtered.push(allItems);
+    }
     return filtered;
   }
   function buildGroupMaps_(blocks){
@@ -6558,6 +6719,13 @@ function buildLeftNav_(){
       enqueueLayoutMutation_((done, fail) => {
         google.script.run
           .withSuccessHandler(res => {
+            if (res && res.ok === false) {
+              setSavePill("err", "Error");
+              setBanner("warn", res.message || "Group nesting failed.");
+              refresh({ mode: 'spinner' });
+              fail();
+              return;
+            }
             if (res?.groups) {
               sectionGroups = res.groups;
               applyGroupMembershipRefresh_();
@@ -6921,16 +7089,19 @@ function buildLeftNav_(){
       .withSuccessHandler(res => {
         if (res?.duplicateIds?.length){
           setSavePill("err", "Blocked");
-          setBanner("warn", "Autosave blocked: Duplicate IDs in column M.\nDuplicate ID(s): " + res.duplicateIds.join(", "));
+          setBanner("warn", "Save paused: duplicate IDs in column M must be fixed in the sheet, then tap the save pill.\nDuplicate ID(s): " + res.duplicateIds.join(", "));
+          pendingFlushHalted = true;
           return;
         }
         if (res?.missingIds?.length){
           setSavePill("err", "Missing ID");
-          setBanner("warn", "Could not find ID(s): " + res.missingIds.join(", "));
+          setBanner("warn", "Skipped item no longer in the sheet: " + res.missingIds.join(", "));
+          res.missingIds.forEach(clearPendingStateForItem_);
           return;
         }
         setBanner(null, null);
         setSavePill("ok", "Saved");
+        pendingRetryDelay = PENDING_RETRY_BASE_MS;
         inp.dataset.lastCommitted = next;
         removePendingEdit_(id, field, next);
         updatePendingPill_();
@@ -7337,9 +7508,42 @@ function buildLeftNav_(){
     if (!id) return;
     const item = findItemById_(id);
     const name = item?.b ? ` "${item.b}"` : '';
-    const ok = window.confirm(`Delete item${name} (ID ${id})? This cannot be undone.`);
-    if (!ok) return;
+    // Which section/group was the delete triggered from?
+    const sourceRow = (editModalSourceRow && editModalSourceRow.getAttribute)
+      ? editModalSourceRow
+      : document.querySelector(`.itemRow[data-id="${cssEscape_(id)}"]`);
+    const sectionKey = sourceRow ? String(sourceRow.getAttribute('data-section-key') || '').trim() : '';
     closeEditModal();
+    // Inside ALL ITEMS (BY DISTRIBUTOR / BY BEVERAGE) -> full removal from the system.
+    if (isDynamicHomeSectionKey_(sectionKey)) {
+      const ok = window.confirm(`Delete item${name} (ID ${id}) from the entire system? This removes it from the spreadsheet and every group, and cannot be undone.`);
+      if (!ok) return;
+      performFullItemDelete_(id);
+      return;
+    }
+    // Anywhere else -> let the user choose the scope.
+    openDeleteItemScopeModal_(id, name, sectionKey);
+  }
+  // Drop any queued/pending autosave state for an item (used after a full
+  // delete) so a later flush doesn't try to save a row that no longer exists.
+  function clearPendingStateForItem_(id){
+    const prefix = `${String(id || '')}::`;
+    if (prefix === '::') return;
+    let changed = false;
+    Array.from(pendingEdits.keys()).forEach(key => {
+      if (key.startsWith(prefix)) { pendingEdits.delete(key); changed = true; }
+    });
+    Array.from(debounceTimers.keys()).forEach(key => {
+      if (!key.startsWith(prefix)) return;
+      clearTimeout(debounceTimers.get(key));
+      debounceTimers.delete(key);
+    });
+    Array.from(lastAutosaveInputs.keys()).forEach(key => {
+      if (key.startsWith(prefix)) lastAutosaveInputs.delete(key);
+    });
+    if (changed) { persistPendingEdits_(); updatePendingPill_(); }
+  }
+  function performFullItemDelete_(id){
     setStatus(`Deleting item ${id}…`);
     setSavePill("saving","Deleting…");
     setBanner(null, null);
@@ -7357,9 +7561,24 @@ function buildLeftNav_(){
         }
         setSavePill("ok","Deleted");
         setStatus(`Deleted item ${id}.`);
+        // The row is gone — drop any queued autosaves for it so a later flush
+        // doesn't report a false "Missing ID".
+        clearPendingStateForItem_(id);
+        // Drop it from the base data too so the dynamic groups stop showing it.
+        baseRows = (baseRows || []).filter(r => !(r?.type === 'item' && String(r.id || '') === String(id)));
+        const appearancesChanged = stripItemFromAllAppearances_(id);
+        rebuildAllRows_();
         removeItemFromAllRows_(id);
         buildRightNav_();
         applyFilter();
+        if (appearancesChanged) {
+          google.script.run
+            .withSuccessHandler(() => {})
+            .withFailureHandler(err => {
+              setBanner("warn", "Item deleted, but cleaning up its other appearances didn't save: " + (err && err.message ? err.message : err));
+            })
+            .saveUiSettings(uiSettings);
+        }
       })
       .withFailureHandler(err => {
         setSavePill("err","Error");
@@ -7367,6 +7586,164 @@ function buildLeftNav_(){
         setStatus("");
       })
       .deleteInventItem({ id });
+  }
+  // Remove every shortcut/secondary appearance of an item from local UI state.
+  function stripItemFromAllAppearances_(id){
+    const target = String(id || '');
+    let changed = false;
+    const map = (sectionShortcuts && typeof sectionShortcuts === 'object') ? sectionShortcuts : {};
+    Object.keys(map).forEach(key => {
+      const list = Array.isArray(map[key]) ? map[key] : [];
+      const next = list.filter(x => String(x) !== target);
+      if (next.length !== list.length) { changed = true; if (next.length) map[key] = next; else delete map[key]; }
+    });
+    if (changed) syncShortcutsFromMap_(map);
+    let secChanged = false;
+    (secondarySections || []).forEach(sec => {
+      if (!Array.isArray(sec.itemIds)) return;
+      const next = sec.itemIds.filter(x => String(x) !== target);
+      if (next.length !== sec.itemIds.length) { sec.itemIds = next; secChanged = true; }
+    });
+    if (secChanged) {
+      uiSettings = uiSettings && typeof uiSettings === 'object' ? uiSettings : {};
+      uiSettings.secondarySections = secondarySections;
+    }
+    return changed || secChanged;
+  }
+  function persistAppearanceSettings_(onDone){
+    setSavePill("saving","Saving…");
+    setBanner(null, null);
+    google.script.run
+      .withSuccessHandler(() => { setSavePill("ok","Saved"); if (onDone) onDone(); })
+      .withFailureHandler(err => {
+        setSavePill("err","Error");
+        setBanner("error", "Save error: " + (err && err.message ? err.message : err));
+      })
+      .saveUiSettings(uiSettings);
+  }
+  function openDeleteItemScopeModal_(id, name, sectionKey){
+    deleteScopeItemId = String(id || '');
+    deleteScopeSectionKey = String(sectionKey || '');
+    const info = document.getElementById('deleteItemScopeInfo');
+    if (info) {
+      info.textContent = `Remove item${name} (ID ${id})? It stays in BY DISTRIBUTOR & BY BEVERAGE unless you delete it from there.`;
+    }
+    const ov = document.getElementById('deleteItemScopeOverlay');
+    if (ov) ov.classList.add('active');
+  }
+  function closeDeleteItemScopeModal_(){
+    const ov = document.getElementById('deleteItemScopeOverlay');
+    if (ov) ov.classList.remove('active');
+    deleteScopeItemId = '';
+    deleteScopeSectionKey = '';
+  }
+  function deleteItemScopeOverlayClick(e){
+    if (e.target === e.currentTarget) closeDeleteItemScopeModal_();
+  }
+  function confirmDeleteItemScope_(scope){
+    const id = deleteScopeItemId;
+    const sectionKey = deleteScopeSectionKey;
+    closeDeleteItemScopeModal_();
+    if (!id) return;
+    if (scope === 'current') removeItemFromCurrentGroup_(id, sectionKey);
+    else if (scope === 'allButDynamic') removeItemFromAllButDynamic_(id);
+  }
+  function removeItemFromCurrentGroup_(id, sectionKey){
+    const key = String(sectionKey || '').trim();
+    const target = String(id || '');
+    // Shortcut appearance inside another home section.
+    const map = (sectionShortcuts && typeof sectionShortcuts === 'object') ? sectionShortcuts : {};
+    if (key && Array.isArray(map[key]) && map[key].some(x => String(x) === target)) {
+      const next = map[key].filter(x => String(x) !== target);
+      if (next.length) map[key] = next; else delete map[key];
+      syncShortcutsFromMap_(map);
+      finishLocalAppearanceChange_(id, `Removed item ${id} from this group.`);
+      return;
+    }
+    // Secondary-section membership.
+    const sec = (secondarySections || []).find(s => String(s.key || '') === key);
+    if (sec && Array.isArray(sec.itemIds) && sec.itemIds.some(x => String(x) === target)) {
+      sec.itemIds = sec.itemIds.filter(x => String(x) !== target);
+      uiSettings = uiSettings && typeof uiSettings === 'object' ? uiSettings : {};
+      uiSettings.secondarySections = secondarySections;
+      finishLocalAppearanceChange_(id, `Removed item ${id} from this group.`);
+      return;
+    }
+    // Otherwise this is the item's real home (or a standalone item on the main
+    // page): detach it by parking the row in the neutral ALL ITEMS home.
+    parkItemInNeutralHome_(id, { stripOthers: false });
+  }
+  function removeItemFromAllButDynamic_(id){
+    // Strip every shortcut/secondary appearance, then park the home row in the
+    // neutral ALL ITEMS section so the item only remains in the dynamic groups.
+    parkItemInNeutralHome_(id, { stripOthers: true });
+  }
+  function parkItemInNeutralHome_(id, opts){
+    const stripOthers = !!(opts && opts.stripOthers);
+    // Parking moves the row into the hidden ALL ITEMS home, where it only shows
+    // via the dynamic groups. An item with no distributor AND no category won't
+    // appear in either dynamic group, so it would vanish from the UI entirely.
+    const item = findItemById_(id);
+    const hasDistributor = !!normalizeDistributorName_(item?.vendor || item?.o || '');
+    const hasCategory = !!String(item?.categoryN || '').trim();
+    if (!hasDistributor && !hasCategory) {
+      setSavePill("err", "Blocked");
+      setBanner("warn", "This item has no distributor or beverage type, so removing it here would hide it from the app. Set one first, or fully delete it from BY DISTRIBUTOR / BY BEVERAGE.");
+      return;
+    }
+    setStatus(`Updating item ${id}…`);
+    setSavePill("saving","Saving…");
+    setBanner(null, null);
+    google.script.run
+      .withSuccessHandler(res => {
+        if (res?.duplicateIds?.length){
+          setSavePill("err", "Blocked");
+          setBanner("warn", "Update blocked: Duplicate IDs in column M.\nDuplicate ID(s): " + res.duplicateIds.join(", "));
+          return;
+        }
+        if (res?.missingIds?.length){
+          setSavePill("err", "Missing ID");
+          setBanner("warn", "Could not find ID(s): " + res.missingIds.join(", "));
+          return;
+        }
+        // Reflect the home move in local data.
+        updateRowSectionLocal_(id, NEUTRAL_HOME_LABEL);
+        const appearancesChanged = stripOthers && stripItemFromAllAppearances_(id);
+        rebuildAllRows_();
+        const finalize = () => {
+          setSavePill("ok","Saved");
+          setStatus(stripOthers
+            ? `Removed item ${id} from all but BY DISTRIBUTOR & BY BEVERAGE.`
+            : `Removed item ${id} from this group.`);
+          buildRightNav_();
+          applyFilter();
+        };
+        // Only gate on the settings save when shortcuts/secondary actually
+        // changed; the home move already succeeded on the server, so don't let
+        // an unrelated saveUiSettings failure block the local update.
+        if (appearancesChanged) persistAppearanceSettings_(finalize);
+        else finalize();
+      })
+      .withFailureHandler(err => {
+        setSavePill("err","Error");
+        setBanner("error", "Update error: " + (err && err.message ? err.message : err));
+        setStatus("");
+      })
+      .removeInventItemFromHome({ id });
+  }
+  function updateRowSectionLocal_(id, sectionLabel){
+    const target = String(id || '');
+    const label = String(sectionLabel || '');
+    (baseRows || []).forEach(r => {
+      if (r && r.type === 'item' && String(r.id || '') === target) r.section = label;
+    });
+  }
+  function finishLocalAppearanceChange_(id, message){
+    rebuildAllRows_();
+    buildRightNav_();
+    applyFilter();
+    setStatus(message || '');
+    persistAppearanceSettings_();
   }
   function openSectionEditModal_(row, label, key, type){
     if (blockLayoutInput_('edit sections')) return;
@@ -9048,6 +9425,8 @@ function buildLeftNav_(){
       if (parentLocks.j) enableJEl.title = 'Disabled by parent group';
     }
     setGroupEditHideDisabledButton_(groupEditHideDisabled);
+    const delBtn = document.getElementById('groupEditDeleteBtn');
+    if (delBtn) delBtn.style.display = isProtectedGroupKey_(groupEditKey) ? 'none' : '';
     const el = document.getElementById('groupEditOverlay');
     if (el) el.style.display = 'flex';
     renderGroupLineList_(groupEditKey);
@@ -9071,6 +9450,41 @@ function buildLeftNav_(){
   }
   function groupEditOverlayClick(e){
     closeGroupEditModal();
+  }
+  function deleteGroupFromEdit_(){
+    const key = groupEditKey || '';
+    if (!key) return;
+    if (isProtectedGroupKey_(key)) {
+      setBanner('warn', 'This group cannot be deleted.');
+      return;
+    }
+    const name = groupEditOldName || key;
+    const ok = window.confirm(`Delete the group "${name}"? The sections inside it stay (their items are not deleted) and become ungrouped. This cannot be undone.`);
+    if (!ok) return;
+    closeGroupEditModal();
+    setSavePill('saving', 'Deleting…');
+    setBanner(null, null);
+    google.script.run
+      .withSuccessHandler(res => {
+        if (!res?.ok) {
+          setSavePill('err', 'Error');
+          setBanner('warn', res?.message || 'Group delete failed.');
+          return;
+        }
+        if (Array.isArray(res.groups)) sectionGroups = res.groups;
+        else sectionGroups = (sectionGroups || []).filter(g => norm_(getGroupKeyClient_(g)) !== norm_(key));
+        rebuildGroupMetaCache_();
+        syncGroupCollapsedDefaults_();
+        setSavePill('ok', 'Deleted');
+        setStatus(`Deleted group "${name}".`);
+        buildRightNav_();
+        applyFilter();
+      })
+      .withFailureHandler(err => {
+        setSavePill('err', 'Error');
+        setBanner('error', 'Group delete error: ' + (err && err.message ? err.message : err));
+      })
+      .deleteSectionGroup({ key });
   }
   function setGroupEditHideDisabledButton_(enabled){
     const btn = document.getElementById('groupEditHideDisabledBtn');
@@ -9162,6 +9576,12 @@ function buildLeftNav_(){
         if (parentChanged) {
           google.script.run
             .withSuccessHandler(res => {
+              if (res && res.ok === false) {
+                setSavePill("err", "Error");
+                setBanner("warn", res.message || "Group nesting failed.");
+                refresh({ mode: 'spinner' });
+                return;
+              }
               if (res?.groups) {
                 sectionGroups = res.groups;
                 rebuildGroupMetaCache_();
@@ -9241,9 +9661,11 @@ function buildLeftNav_(){
     const nameEl = document.getElementById('newDistributorName');
     const repEl = document.getElementById('newDistributorRepName');
     const phoneEl = document.getElementById('newDistributorRepPhone');
+    const emailEl = document.getElementById('newDistributorRepEmail');
     if (nameEl) nameEl.value = '';
     if (repEl) repEl.value = '';
     if (phoneEl) phoneEl.value = '';
+    if (emailEl) emailEl.value = '';
     document.querySelectorAll('#newDistributorOrderDays input[type="checkbox"]').forEach(cb => { cb.checked = false; });
     const tableCountEl = document.getElementById('newDistributorTableCount');
     if (tableCountEl) tableCountEl.value = '1';
@@ -9273,10 +9695,20 @@ function buildLeftNav_(){
     if (target) target.classList.add('active');
     if (distWizard) distWizard.step = step;
   }
+  // Template options: only order-guide sheets that actually exist as tabs, so a
+  // selection always resolves on the server (avoids the "Template sheet not
+  // found" error when a curated name doesn't match a real tab).
+  function templateSheetOptions_(){
+    const real = new Set((orderGuideSheetNames || []).map(s => String(s || '').trim()).filter(Boolean));
+    let list = (orderGuideSheets || []).map(s => String(s || '').trim()).filter(s => real.has(s));
+    if (!list.length) list = Array.from(real);
+    // Only offer real tabs — never fabricate a name that may not exist.
+    return Array.from(new Set(list));
+  }
   function populateDistributorTemplates_(){
     const select = document.getElementById('newDistributorTemplate');
     if (!select) return;
-    const list = (orderGuideSheets && orderGuideSheets.length) ? orderGuideSheets : ['RNDC'];
+    const list = templateSheetOptions_();
     select.innerHTML = list.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
   }
   function setDistributorTableCount_(count, preserve){
@@ -9501,6 +9933,7 @@ function buildLeftNav_(){
     }
     const repName = (document.getElementById('newDistributorRepName')?.value || '').trim();
     const repPhone = (document.getElementById('newDistributorRepPhone')?.value || '').trim();
+    const repEmail = (document.getElementById('newDistributorRepEmail')?.value || '').trim();
     const templateSheet = document.getElementById('newDistributorTemplate')?.value || '';
     const orderDays = {};
     document.querySelectorAll('#newDistributorOrderDays input[type="checkbox"]').forEach(cb => {
@@ -9532,6 +9965,7 @@ function buildLeftNav_(){
         name,
         repName,
         repPhone,
+        repEmail,
         orderDays,
         tableCount,
         tableCategories,
@@ -9576,6 +10010,7 @@ function buildLeftNav_(){
           <div class="distributorMeta">
             Rep: ${escapeHtml(d.repName || '')}<br/>
             Phone: ${escapeHtml(d.repPhone || '')}<br/>
+            Email: ${escapeHtml(d.repEmail || '')}<br/>
             Order Days: ${escapeHtml(dayLabels || 'None')}<br/>
             Tables: ${escapeHtml(String(d.tableCount || (d.tables || []).length || ''))}<br/>
             ${tableLines || ''}
@@ -9626,12 +10061,14 @@ function buildLeftNav_(){
     const sheetEl = document.getElementById('manageDistributorSheetName');
     const repEl = document.getElementById('manageDistributorRepName');
     const phoneEl = document.getElementById('manageDistributorRepPhone');
+    const emailEl = document.getElementById('manageDistributorRepEmail');
     const refEl = document.getElementById('manageDistributorRef');
     const templateEl = document.getElementById('manageDistributorTemplate');
     if (nameEl) nameEl.value = '';
     if (sheetEl) sheetEl.value = '';
     if (repEl) repEl.value = '';
     if (phoneEl) phoneEl.value = '';
+    if (emailEl) emailEl.value = '';
     if (refEl) refEl.value = '';
     if (templateEl && templateEl.options.length) templateEl.value = templateEl.options[0].value;
     document.querySelectorAll('#manageDistributorOrderDays input[type="checkbox"]').forEach(cb => {
@@ -9668,7 +10105,7 @@ function buildLeftNav_(){
   function populateManageDistributorTemplates_(){
     const select = document.getElementById('manageDistributorTemplate');
     if (!select) return;
-    const list = (orderGuideSheets && orderGuideSheets.length) ? orderGuideSheets : ['RNDC'];
+    const list = templateSheetOptions_();
     select.innerHTML = list.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
   }
   function populateManageDistributorSheetList_(){
@@ -9706,12 +10143,14 @@ function buildLeftNav_(){
     const sheetEl = document.getElementById('manageDistributorSheetName');
     const repEl = document.getElementById('manageDistributorRepName');
     const phoneEl = document.getElementById('manageDistributorRepPhone');
+    const emailEl = document.getElementById('manageDistributorRepEmail');
     const refEl = document.getElementById('manageDistributorRef');
     const templateEl = document.getElementById('manageDistributorTemplate');
     if (nameEl) nameEl.value = dist.name || '';
     if (sheetEl) sheetEl.value = dist.sheetName || '';
     if (repEl) repEl.value = dist.repName || '';
     if (phoneEl) phoneEl.value = dist.repPhone || '';
+    if (emailEl) emailEl.value = dist.repEmail || '';
     if (refEl) refEl.value = dist.ref || '';
     if (templateEl) templateEl.value = dist.templateSheet || '';
     const days = dist.orderDays || {};
@@ -9812,6 +10251,7 @@ function buildLeftNav_(){
     const sheetName = (document.getElementById('manageDistributorSheetName')?.value || '').trim();
     const repName = (document.getElementById('manageDistributorRepName')?.value || '').trim();
     const repPhone = (document.getElementById('manageDistributorRepPhone')?.value || '').trim();
+    const repEmail = (document.getElementById('manageDistributorRepEmail')?.value || '').trim();
     const templateSheet = document.getElementById('manageDistributorTemplate')?.value || '';
     const orderDays = {};
     document.querySelectorAll('#manageDistributorOrderDays input[type="checkbox"]').forEach(cb => {
@@ -9844,7 +10284,8 @@ function buildLeftNav_(){
           })),
           orderDays,
           repName,
-          repPhone
+          repPhone,
+          repEmail
         });
         let replaced = false;
         const matchKey = norm_(manageDistKey || '');
@@ -9890,6 +10331,7 @@ function buildLeftNav_(){
         sheetName,
         repName,
         repPhone,
+        repEmail,
         orderDays,
         tableCount: manageDistWizard.tableCount,
         tableCategories,
@@ -10058,6 +10500,14 @@ function buildLeftNav_(){
   loadPendingEdits_();
   loadPendingMeta_();
   updatePendingPill_();
+  // Warn before leaving if edits haven't reached the server yet (data safety).
+  window.addEventListener('beforeunload', (e) => {
+    if (pendingCount_() > 0) {
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
+    }
+  });
   updateRightTabStates_();
   document.addEventListener('keydown', handleGlobalKeyNav_);
   document.addEventListener('pointermove', handleAddSectionPointerMove_);

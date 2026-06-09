@@ -1,5 +1,13 @@
 /*************************
  * TIN PLATE INVENT — WEBAPP
+ *
+ * Google Apps Script web app backing the Tin Plate beverage management portal.
+ * Bound to a Google Sheet, it serves a single-page UI (Index/Styles/JavaScript)
+ * for taking bar/restaurant beverage inventory and building distributor order
+ * guides. The script reads and writes the INVENT and ORDER sheets, persists UI
+ * customization (sections, groups, distributors, layout) to hidden settings
+ * sheets, and generates PDFs of the inventory count and order guides — which it
+ * can email to recipients or bundle into a downloadable ZIP.
  *************************/
 
 const CONFIG = {
@@ -845,8 +853,8 @@ function getDistroDataSheet_() {
   let sheet = ss.getSheetByName(CONFIG.DISTRO_DATA_SHEET);
   if (!sheet) {
     sheet = ss.insertSheet(CONFIG.DISTRO_DATA_SHEET);
-    sheet.getRange(1, 1, 1, 10).setValues([[
-      'REF', 'NAME', 'KEY', 'SHEET', 'REP_NAME', 'REP_PHONE',
+    sheet.getRange(1, 1, 1, 11).setValues([[
+      'REF', 'NAME', 'KEY', 'SHEET', 'REP_NAME', 'REP_PHONE', 'REP_EMAIL',
       'ORDER_DAYS', 'TABLE_COUNT', 'TEMPLATE', 'TABLES_JSON'
     ]]);
     sheet.hideSheet();
@@ -925,15 +933,16 @@ function syncDistroDataSheet_(distributors) {
     String(d.sheetName || '').trim(),
     String(d.repName || '').trim(),
     String(d.repPhone || '').trim(),
+    String(d.repEmail || '').trim(),
     JSON.stringify(d.orderDays || {}),
     Number(d.tableCount || (d.tables || []).length || 0),
     String(d.templateSheet || '').trim(),
     JSON.stringify(d.tables || [])
   ]));
   const lastRow = Math.max(sheet.getLastRow(), 2);
-  sheet.getRange(2, 1, Math.max(1, lastRow - 1), 10).clearContent();
+  sheet.getRange(2, 1, Math.max(1, lastRow - 1), 11).clearContent();
   if (values.length) {
-    sheet.getRange(2, 1, values.length, 10).setValues(values);
+    sheet.getRange(2, 1, values.length, 11).setValues(values);
   }
 }
 
@@ -1114,6 +1123,7 @@ function autoCreateDistributorEntry_(vendorName, categories, uiSettings, opts) {
     name: nameRaw,
     repName: '',
     repPhone: '',
+    repEmail: '',
     orderDays: {},
     sheetName,
     templateSheet: templateSheet ? templateName : '',
@@ -1696,12 +1706,42 @@ function copyFormatBlock_(sheet, exampleRow, newRow, colStart, colEnd) {
     .copyFormatToRange(sheet, colStart, colEnd, newRow, newRow);
 }
 
+/**
+ * Returns a Set of 1-based row numbers that are hidden-by-user, fetched in a
+ * SINGLE Sheets API call. Calling Sheet.isRowHiddenByUser() per row is a
+ * backend round-trip each, which made loads take minutes on large sheets.
+ * Requires the "Google Sheets API" advanced service to be enabled in the Apps
+ * Script project (Editor → Services → add "Google Sheets API"). Returns null if
+ * the service isn't available so callers can fall back to the per-row check.
+ */
+function getHiddenRowSet_(ss, sheetName) {
+  try {
+    if (typeof Sheets === 'undefined' || !Sheets.Spreadsheets) return null;
+    const resp = Sheets.Spreadsheets.get(ss.getId(), {
+      ranges: [sheetName],
+      fields: 'sheets(data(rowMetadata(hiddenByUser)))'
+    });
+    const sheetsArr = resp && resp.sheets;
+    if (!sheetsArr || !sheetsArr.length) return null;
+    const data = sheetsArr[0].data;
+    if (!data || !data.length) return new Set();
+    const meta = data[0].rowMetadata || [];
+    const set = new Set();
+    for (let i = 0; i < meta.length; i++) {
+      if (meta[i] && meta[i].hiddenByUser) set.add(i + 1);
+    }
+    return set;
+  } catch (e) {
+    console.error('getHiddenRowSet_:', e);
+    return null;
+  }
+}
+
 function getInventData() {
   assertAuthorized_();
   const ss = getSpreadsheet_();
   const sheet = ss.getSheetByName(CONFIG.INVENT_SHEET);
   if (!sheet) throw new Error(`Missing sheet: ${CONFIG.INVENT_SHEET}`);
-
   const meta = getInventoryMeta_();
   const sectionLabels = getSectionLabelOverrides_();
   const uiSettings = getUiSettings_();
@@ -1800,9 +1840,13 @@ function getInventData() {
   const sectionKeys = new Set();
   let currentSection = null;
 
+  // Fetch all hidden-by-user rows in one call (falls back to per-row if the
+  // Sheets advanced service isn't enabled).
+  const hiddenRows = getHiddenRowSet_(ss, sheet.getName());
+
   for (let r = 0; r < lastRow; r++) {
     const rowNum = r + 1;
-    if (sheet.isRowHiddenByUser(rowNum)) continue;
+    if (hiddenRows ? hiddenRows.has(rowNum) : sheet.isRowHiddenByUser(rowNum)) continue;
 
     const commonName = String(display[r][CONFIG.COL.COMMON_NAME - 1] || '').trim();
     const id = String(display[r][CONFIG.COL.ID - 1] || '').trim();
@@ -3654,29 +3698,32 @@ function setGroupParent(payload) {
   }
 
   const groups = getSectionGroups_();
-  const childExists = groups.some(g => norm_(g.key || g.name || '') === norm_(childKey));
+  const childExists = groups.some(g => normalizeGroupKey_(g.key || g.name || '') === childKey);
   if (!childExists) return { ok: false, message: 'Group not found.' };
   if (parentKey) {
-    const parentExists = groups.some(g => norm_(g.key || g.name || '') === norm_(parentKey));
+    const parentExists = groups.some(g => normalizeGroupKey_(g.key || g.name || '') === parentKey);
     if (!parentExists) return { ok: false, message: 'Parent group not found.' };
   }
 
   let next = groups.map(g => Object.assign({}, g));
   next = next.map(g => {
     const keys = Array.isArray(g.groupKeys) ? g.groupKeys.slice() : [];
-    const filtered = keys.filter(k => norm_(k) !== norm_(childKey));
+    const filtered = keys.filter(k => normalizeGroupKey_(k) !== childKey);
     return (filtered.length !== keys.length) ? Object.assign({}, g, { groupKeys: filtered }) : g;
   });
 
   if (parentKey) {
-    const idx = next.findIndex(g => norm_(g.key || g.name || '') === norm_(parentKey));
+    const idx = next.findIndex(g => normalizeGroupKey_(g.key || g.name || '') === parentKey);
     const keys = Array.isArray(next[idx].groupKeys) ? next[idx].groupKeys.slice() : [];
-    if (!keys.some(k => norm_(k) === norm_(childKey))) {
+    if (!keys.some(k => normalizeGroupKey_(k) === childKey)) {
       keys.push(childKey);
       next[idx] = Object.assign({}, next[idx], { groupKeys: keys });
     }
+    // A cycle exists only if the parent is already a descendant of the child,
+    // i.e. the child can already reach the parent. Check that direction —
+    // checking parent->child would be trivially true since we just added that edge.
     const map = buildGroupChildrenMap_(next);
-    if (hasGroupPath_(map, parentKey, childKey)) {
+    if (hasGroupPath_(map, childKey, parentKey)) {
       return { ok: false, message: 'Group nesting creates a cycle.' };
     }
   }
@@ -3715,13 +3762,16 @@ function getTableBlocksFromSheet_(sheet) {
   return blocks;
 }
 
-function getDefaultOrderingBlocksForSheet_(sheet) {
+function getDefaultOrderingBlocksForSheet_(sheet, lookupName) {
   const out = [];
   if (!sheet) return out;
-  const name = sheet.getName();
+  // Match ORDERING_TABLES by the template/origin name, not the (possibly
+  // renamed) copy — a new distributor's sheet is named after the distributor,
+  // so its own name never matches a built-in template like SOUTHERN.
+  const name = norm_(lookupName || sheet.getName());
   Object.keys(ORDERING_TABLES || {}).forEach(letter => {
     const def = ORDERING_TABLES[letter];
-    if (!def || def.sheet !== name || !def.a1) return;
+    if (!def || norm_(def.sheet) !== name || !def.a1) return;
     const range = sheet.getRange(def.a1);
     out.push({
       a1: def.a1,
@@ -3784,8 +3834,14 @@ function createDistributor(payload) {
 
   const ss = getSpreadsheet_();
   const templateName = String(payload?.templateSheet || uiSettings?.orderGuideTemplate || 'RNDC').trim();
-  const templateSheet = ss.getSheetByName(templateName);
-  if (!templateSheet) return { ok: false, message: `Template sheet "${templateName}" not found.` };
+  // Resolve exact first, then fall back to the app's normalized matching so a
+  // casing/whitespace difference between the dropdown value and the real tab
+  // name doesn't fail the create.
+  let templateSheet = ss.getSheetByName(templateName) || findSheetByNormalizedName_(ss, templateName);
+  if (!templateSheet) {
+    const available = ss.getSheets().map(s => s.getName()).join(', ');
+    return { ok: false, message: `Template sheet "${templateName}" not found. Available sheets: ${available}` };
+  }
 
   const sheetName = sanitizeSheetName_(payload?.sheetName || nameRaw);
   if (ss.getSheetByName(sheetName)) {
@@ -3796,8 +3852,8 @@ function createDistributor(payload) {
   newSheet.showSheet();
 
   let blocks = getTableBlocksFromSheet_(newSheet);
-  if (!blocks.length) blocks = getDefaultOrderingBlocksForSheet_(newSheet);
-  if (!blocks.length) return { ok: false, message: 'No tables found on template sheet.' };
+  if (!blocks.length) blocks = getDefaultOrderingBlocksForSheet_(newSheet, templateSheet.getName());
+  if (!blocks.length) return { ok: false, message: `No tables found on template sheet "${templateSheet.getName()}". Pick a template whose order-guide layout is known, or use a sheet that has a defined table range.` };
 
   if (blocks.length < tableCount) {
     blocks = cloneTableBlocks_(newSheet, blocks, tableCount);
@@ -3825,6 +3881,7 @@ function createDistributor(payload) {
     name: nameRaw,
     repName: String(payload?.repName || '').trim(),
     repPhone: String(payload?.repPhone || '').trim(),
+    repEmail: String(payload?.repEmail || '').trim(),
     orderDays,
     sheetName,
     templateSheet: templateName,
@@ -3893,8 +3950,12 @@ function updateDistributor(payload) {
   const templateSheet = String(payload?.templateSheet || current.templateSheet || '').trim();
   const tableCount = Math.max(1, Math.min(10, parseInt(payload?.tableCount, 10) || current.tableCount || (current.tables || []).length || 1));
   const orderDays = payload?.orderDays && typeof payload.orderDays === 'object' ? payload.orderDays : (current.orderDays || {});
-  const repName = String(payload?.repName || current.repName || '').trim();
-  const repPhone = String(payload?.repPhone || current.repPhone || '').trim();
+  // Use the payload value whenever the field is present (even ''), so a user can
+  // clear a previously stored value; otherwise keep the current value.
+  const hasField_ = (k) => Object.prototype.hasOwnProperty.call(payload || {}, k);
+  const repName = String((hasField_('repName') ? payload.repName : current.repName) || '').trim();
+  const repPhone = String((hasField_('repPhone') ? payload.repPhone : current.repPhone) || '').trim();
+  const repEmail = String((hasField_('repEmail') ? payload.repEmail : current.repEmail) || '').trim();
 
   const ss = getSpreadsheet_();
   const lock = getLock_();
@@ -3917,7 +3978,24 @@ function updateDistributor(payload) {
     }
 
     let blocks = getTableBlocksFromSheet_(sheet);
-    if (!blocks.length) blocks = getDefaultOrderingBlocksForSheet_(sheet);
+    if (!blocks.length) blocks = getDefaultOrderingBlocksForSheet_(sheet, current.templateSheet || templateSheet || sheet.getName());
+    // Last resort: reuse the table ranges already stored for this distributor.
+    if (!blocks.length && Array.isArray(current.tables) && current.tables.length) {
+      blocks = current.tables
+        .filter(t => t && t.a1)
+        .map(t => {
+          const range = sheet.getRange(t.a1);
+          return {
+            a1: t.a1,
+            tableId: t.tableId || null,
+            name: t.name || '',
+            startRow: range.getRow(),
+            startCol: range.getColumn(),
+            numRows: range.getNumRows(),
+            numCols: range.getNumColumns()
+          };
+        });
+    }
     if (!blocks.length) return { ok: false, message: 'No tables found on distributor sheet.' };
     if (blocks.length < tableCount) blocks = cloneTableBlocks_(sheet, blocks, tableCount);
 
@@ -3946,7 +4024,8 @@ function updateDistributor(payload) {
       tables,
       orderDays,
       repName,
-      repPhone
+      repPhone,
+      repEmail
     });
 
     if (nameRaw && norm_(current.name || '') !== norm_(name)) {
@@ -4079,9 +4158,18 @@ function addInventItem(payload) {
     const idVals = sheet.getRange(1, CONFIG.COL.ID, sheet.getLastRow(), 1).getDisplayValues()
       .map(r => String(r[0] || '').trim()).filter(Boolean);
 
+    // Monotonic IDs that are never recycled: deleting an item must not free its
+    // ID for reuse, or a stale in-flight edit could land on a different product.
+    // A persistent counter advances past deleted IDs; it self-seeds from the
+    // current max, so no migration is needed and manual sheet edits stay safe.
     const used = new Set(idVals.filter(v => /^\d+$/.test(v)).map(v => parseInt(v, 10)));
-    let nextId = 1;
+    let maxExisting = 0;
+    used.forEach(n => { if (n > maxExisting) maxExisting = n; });
+    const idProps = PropertiesService.getScriptProperties();
+    const storedNext = parseInt(idProps.getProperty('NEXT_ITEM_ID') || '0', 10) || 0;
+    let nextId = Math.max(maxExisting + 1, storedNext);
     while (used.has(nextId)) nextId++;
+    idProps.setProperty('NEXT_ITEM_ID', String(nextId + 1));
 
     const templateRow = findTemplateRowInSection_(sheet, headerRow, nextHeaderRow, newRow);
     if (templateRow) {
@@ -4194,6 +4282,59 @@ function deleteInventItem(payload) {
     sheet.deleteRow(row);
 
     return { ok: true, id, row, orderingDeleted: orderingRows.length };
+  } finally {
+    if (lock) lock.releaseLock();
+  }
+}
+
+// Neutral "ALL ITEMS" parking section: where an item's row is moved when it is
+// detached from every location group but must still exist (so it keeps showing
+// in the BY DISTRIBUTOR / BY BEVERAGE dynamic groups under ALL ITEMS).
+const ALL_ITEMS_SECTION_LABEL = 'ALL ITEMS';
+
+function removeInventItemFromHome(payload) {
+  assertAuthorized_();
+  const id = String(payload?.id || '').trim();
+  if (!id) throw new Error('Item ID is required.');
+
+  const ss = getSpreadsheet_();
+  const sheet = ss.getSheetByName(CONFIG.INVENT_SHEET);
+  if (!sheet) throw new Error(`Missing sheet: ${CONFIG.INVENT_SHEET}`);
+
+  const scanWidth = Math.max(CONFIG.COL.NOTES, 18);
+  const lock = getLock_();
+  if (lock) lock.waitLock(CONFIG.LOCK_WAIT_MS);
+
+  try {
+    const readCols = () => {
+      const lastRow = sheet.getLastRow();
+      const colB = lastRow ? sheet.getRange(1, CONFIG.COL.COMMON_NAME, lastRow, 1).getDisplayValues().map(r => String(r[0] || '').trim()) : [];
+      const colId = lastRow ? sheet.getRange(1, CONFIG.COL.ID, lastRow, 1).getDisplayValues().map(r => String(r[0] || '').trim()) : [];
+      return { colB, colId };
+    };
+
+    let { colB, colId } = readCols();
+
+    // Ensure the neutral parking section exists.
+    if (findSectionHeaderRow_(colB, colId, ALL_ITEMS_SECTION_LABEL) === -1) {
+      insertHomeSectionRows_(sheet, [{ label: ALL_ITEMS_SECTION_LABEL }], scanWidth, colB, colId);
+      ({ colB, colId } = readCols());
+    }
+
+    // Locate the item row by ID.
+    let row = -1;
+    for (let r = 0; r < colId.length; r++) {
+      if (colId[r] === id) {
+        if (row !== -1) return { duplicateIds: [id] };
+        row = r + 1;
+      }
+    }
+    if (row === -1) return { missingIds: [id] };
+
+    const moveRes = moveInventRowToSection_(sheet, row, ALL_ITEMS_SECTION_LABEL, scanWidth);
+    if (!moveRes.ok) throw new Error(moveRes.message || 'Move failed.');
+
+    return { ok: true, id, section: ALL_ITEMS_SECTION_LABEL, moved: !!moveRes.moved };
   } finally {
     if (lock) lock.releaseLock();
   }
