@@ -3762,13 +3762,16 @@ function getTableBlocksFromSheet_(sheet) {
   return blocks;
 }
 
-function getDefaultOrderingBlocksForSheet_(sheet) {
+function getDefaultOrderingBlocksForSheet_(sheet, lookupName) {
   const out = [];
   if (!sheet) return out;
-  const name = sheet.getName();
+  // Match ORDERING_TABLES by the template/origin name, not the (possibly
+  // renamed) copy — a new distributor's sheet is named after the distributor,
+  // so its own name never matches a built-in template like SOUTHERN.
+  const name = norm_(lookupName || sheet.getName());
   Object.keys(ORDERING_TABLES || {}).forEach(letter => {
     const def = ORDERING_TABLES[letter];
-    if (!def || def.sheet !== name || !def.a1) return;
+    if (!def || norm_(def.sheet) !== name || !def.a1) return;
     const range = sheet.getRange(def.a1);
     out.push({
       a1: def.a1,
@@ -3849,8 +3852,8 @@ function createDistributor(payload) {
   newSheet.showSheet();
 
   let blocks = getTableBlocksFromSheet_(newSheet);
-  if (!blocks.length) blocks = getDefaultOrderingBlocksForSheet_(newSheet);
-  if (!blocks.length) return { ok: false, message: 'No tables found on template sheet.' };
+  if (!blocks.length) blocks = getDefaultOrderingBlocksForSheet_(newSheet, templateSheet.getName());
+  if (!blocks.length) return { ok: false, message: `No tables found on template sheet "${templateSheet.getName()}". Pick a template whose order-guide layout is known, or use a sheet that has a defined table range.` };
 
   if (blocks.length < tableCount) {
     blocks = cloneTableBlocks_(newSheet, blocks, tableCount);
@@ -3975,7 +3978,24 @@ function updateDistributor(payload) {
     }
 
     let blocks = getTableBlocksFromSheet_(sheet);
-    if (!blocks.length) blocks = getDefaultOrderingBlocksForSheet_(sheet);
+    if (!blocks.length) blocks = getDefaultOrderingBlocksForSheet_(sheet, current.templateSheet || templateSheet || sheet.getName());
+    // Last resort: reuse the table ranges already stored for this distributor.
+    if (!blocks.length && Array.isArray(current.tables) && current.tables.length) {
+      blocks = current.tables
+        .filter(t => t && t.a1)
+        .map(t => {
+          const range = sheet.getRange(t.a1);
+          return {
+            a1: t.a1,
+            tableId: t.tableId || null,
+            name: t.name || '',
+            startRow: range.getRow(),
+            startCol: range.getColumn(),
+            numRows: range.getNumRows(),
+            numCols: range.getNumColumns()
+          };
+        });
+    }
     if (!blocks.length) return { ok: false, message: 'No tables found on distributor sheet.' };
     if (blocks.length < tableCount) blocks = cloneTableBlocks_(sheet, blocks, tableCount);
 
