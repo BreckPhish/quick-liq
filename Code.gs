@@ -1706,12 +1706,42 @@ function copyFormatBlock_(sheet, exampleRow, newRow, colStart, colEnd) {
     .copyFormatToRange(sheet, colStart, colEnd, newRow, newRow);
 }
 
+/**
+ * Returns a Set of 1-based row numbers that are hidden-by-user, fetched in a
+ * SINGLE Sheets API call. Calling Sheet.isRowHiddenByUser() per row is a
+ * backend round-trip each, which made loads take minutes on large sheets.
+ * Requires the "Google Sheets API" advanced service to be enabled in the Apps
+ * Script project (Editor → Services → add "Google Sheets API"). Returns null if
+ * the service isn't available so callers can fall back to the per-row check.
+ */
+function getHiddenRowSet_(ss, sheetName) {
+  try {
+    if (typeof Sheets === 'undefined' || !Sheets.Spreadsheets) return null;
+    const resp = Sheets.Spreadsheets.get(ss.getId(), {
+      ranges: [sheetName],
+      fields: 'sheets(data(rowMetadata(hiddenByUser)))'
+    });
+    const sheetsArr = resp && resp.sheets;
+    if (!sheetsArr || !sheetsArr.length) return null;
+    const data = sheetsArr[0].data;
+    if (!data || !data.length) return new Set();
+    const meta = data[0].rowMetadata || [];
+    const set = new Set();
+    for (let i = 0; i < meta.length; i++) {
+      if (meta[i] && meta[i].hiddenByUser) set.add(i + 1);
+    }
+    return set;
+  } catch (e) {
+    console.error('getHiddenRowSet_:', e);
+    return null;
+  }
+}
+
 function getInventData() {
   assertAuthorized_();
   const ss = getSpreadsheet_();
   const sheet = ss.getSheetByName(CONFIG.INVENT_SHEET);
   if (!sheet) throw new Error(`Missing sheet: ${CONFIG.INVENT_SHEET}`);
-
   const meta = getInventoryMeta_();
   const sectionLabels = getSectionLabelOverrides_();
   const uiSettings = getUiSettings_();
@@ -1810,9 +1840,13 @@ function getInventData() {
   const sectionKeys = new Set();
   let currentSection = null;
 
+  // Fetch all hidden-by-user rows in one call (falls back to per-row if the
+  // Sheets advanced service isn't enabled).
+  const hiddenRows = getHiddenRowSet_(ss, sheet.getName());
+
   for (let r = 0; r < lastRow; r++) {
     const rowNum = r + 1;
-    if (sheet.isRowHiddenByUser(rowNum)) continue;
+    if (hiddenRows ? hiddenRows.has(rowNum) : sheet.isRowHiddenByUser(rowNum)) continue;
 
     const commonName = String(display[r][CONFIG.COL.COMMON_NAME - 1] || '').trim();
     const id = String(display[r][CONFIG.COL.ID - 1] || '').trim();
