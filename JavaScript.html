@@ -7708,7 +7708,7 @@ function buildLeftNav_(){
         }
         // Reflect the home move in local data.
         updateRowSectionLocal_(id, NEUTRAL_HOME_LABEL);
-        if (stripOthers) stripItemFromAllAppearances_(id);
+        const appearancesChanged = stripOthers && stripItemFromAllAppearances_(id);
         rebuildAllRows_();
         const finalize = () => {
           setSavePill("ok","Saved");
@@ -7718,8 +7718,11 @@ function buildLeftNav_(){
           buildRightNav_();
           applyFilter();
         };
-        // Persist the appearance changes (shortcuts/secondary) if any.
-        persistAppearanceSettings_(finalize);
+        // Only gate on the settings save when shortcuts/secondary actually
+        // changed; the home move already succeeded on the server, so don't let
+        // an unrelated saveUiSettings failure block the local update.
+        if (appearancesChanged) persistAppearanceSettings_(finalize);
+        else finalize();
       })
       .withFailureHandler(err => {
         setSavePill("err","Error");
@@ -9699,7 +9702,7 @@ function buildLeftNav_(){
     const real = new Set((orderGuideSheetNames || []).map(s => String(s || '').trim()).filter(Boolean));
     let list = (orderGuideSheets || []).map(s => String(s || '').trim()).filter(s => real.has(s));
     if (!list.length) list = Array.from(real);
-    if (!list.length) list = ['RNDC'];
+    // Only offer real tabs — never fabricate a name that may not exist.
     return Array.from(new Set(list));
   }
   function populateDistributorTemplates_(){

@@ -3913,9 +3913,12 @@ function updateDistributor(payload) {
   const templateSheet = String(payload?.templateSheet || current.templateSheet || '').trim();
   const tableCount = Math.max(1, Math.min(10, parseInt(payload?.tableCount, 10) || current.tableCount || (current.tables || []).length || 1));
   const orderDays = payload?.orderDays && typeof payload.orderDays === 'object' ? payload.orderDays : (current.orderDays || {});
-  const repName = String(payload?.repName || current.repName || '').trim();
-  const repPhone = String(payload?.repPhone || current.repPhone || '').trim();
-  const repEmail = String(payload?.repEmail || current.repEmail || '').trim();
+  // Use the payload value whenever the field is present (even ''), so a user can
+  // clear a previously stored value; otherwise keep the current value.
+  const hasField_ = (k) => Object.prototype.hasOwnProperty.call(payload || {}, k);
+  const repName = String((hasField_('repName') ? payload.repName : current.repName) || '').trim();
+  const repPhone = String((hasField_('repPhone') ? payload.repPhone : current.repPhone) || '').trim();
+  const repEmail = String((hasField_('repEmail') ? payload.repEmail : current.repEmail) || '').trim();
 
   const ss = getSpreadsheet_();
   const lock = getLock_();
