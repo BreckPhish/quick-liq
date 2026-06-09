@@ -2709,10 +2709,24 @@ function resolveOrderingTargetTable_(vendor, categoryN, distributorsOverride) {
   return { ok: true, vendor: vendorKey, categoryKey: catGroup, tableKey };
 }
 
-function getTableRangeByIdOrFallback_(sheet, tableId, fallbackA1) {
+function getTableRangeByIdOrFallback_(sheet, tableId, fallbackA1, tablesCache) {
   try {
-    if (sheet && typeof sheet.getTables === 'function') {
-      const tables = sheet.getTables() || [];
+    // Only consult getTables() (a slow call) when we actually have a native
+    // table id to match. Cache the result per sheet so a single ordering scan
+    // doesn't call getTables() once per table definition.
+    if (tableId != null && tableId !== '' && sheet && typeof sheet.getTables === 'function') {
+      let tables;
+      if (tablesCache) {
+        const cacheKey = sheet.getName();
+        if (tablesCache.has(cacheKey)) {
+          tables = tablesCache.get(cacheKey);
+        } else {
+          tables = sheet.getTables() || [];
+          tablesCache.set(cacheKey, tables);
+        }
+      } else {
+        tables = sheet.getTables() || [];
+      }
       for (const t of tables) {
         try {
           const id = (typeof t.getId === 'function') ? t.getId() : null;
@@ -2816,13 +2830,14 @@ function findOrderingRowsForId_(ss, id) {
 
   const distributors = getDistributorsFromSettings_(getUiSettings_());
   const tables = getOrderingTableDefs_(distributors);
+  const tablesCache = new Map(); // getTables() result per sheet — avoids a slow call per def
   for (const def of tables) {
     if (!def || !def.sheet) continue;
     if (!def.tableId && !def.a1) continue;
     const sheet = ss.getSheetByName(def.sheet);
     if (!sheet) continue;
 
-    const loc = getTableRangeByIdOrFallback_(sheet, def.tableId, def.a1);
+    const loc = getTableRangeByIdOrFallback_(sheet, def.tableId, def.a1, tablesCache);
     const tableRange = loc.range;
     const tableObj = loc.tableObj;
     if (!tableRange) continue;
