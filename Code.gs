@@ -3797,8 +3797,14 @@ function createDistributor(payload) {
 
   const ss = getSpreadsheet_();
   const templateName = String(payload?.templateSheet || uiSettings?.orderGuideTemplate || 'RNDC').trim();
-  const templateSheet = ss.getSheetByName(templateName);
-  if (!templateSheet) return { ok: false, message: `Template sheet "${templateName}" not found.` };
+  // Resolve exact first, then fall back to the app's normalized matching so a
+  // casing/whitespace difference between the dropdown value and the real tab
+  // name doesn't fail the create.
+  let templateSheet = ss.getSheetByName(templateName) || findSheetByNormalizedName_(ss, templateName);
+  if (!templateSheet) {
+    const available = ss.getSheets().map(s => s.getName()).join(', ');
+    return { ok: false, message: `Template sheet "${templateName}" not found. Available sheets: ${available}` };
+  }
 
   const sheetName = sanitizeSheetName_(payload?.sheetName || nameRaw);
   if (ss.getSheetByName(sheetName)) {

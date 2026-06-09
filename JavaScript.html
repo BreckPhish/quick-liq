@@ -9692,10 +9692,20 @@ function buildLeftNav_(){
     if (target) target.classList.add('active');
     if (distWizard) distWizard.step = step;
   }
+  // Template options: only order-guide sheets that actually exist as tabs, so a
+  // selection always resolves on the server (avoids the "Template sheet not
+  // found" error when a curated name doesn't match a real tab).
+  function templateSheetOptions_(){
+    const real = new Set((orderGuideSheetNames || []).map(s => String(s || '').trim()).filter(Boolean));
+    let list = (orderGuideSheets || []).map(s => String(s || '').trim()).filter(s => real.has(s));
+    if (!list.length) list = Array.from(real);
+    if (!list.length) list = ['RNDC'];
+    return Array.from(new Set(list));
+  }
   function populateDistributorTemplates_(){
     const select = document.getElementById('newDistributorTemplate');
     if (!select) return;
-    const list = (orderGuideSheets && orderGuideSheets.length) ? orderGuideSheets : ['RNDC'];
+    const list = templateSheetOptions_();
     select.innerHTML = list.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
   }
   function setDistributorTableCount_(count, preserve){
@@ -10092,7 +10102,7 @@ function buildLeftNav_(){
   function populateManageDistributorTemplates_(){
     const select = document.getElementById('manageDistributorTemplate');
     if (!select) return;
-    const list = (orderGuideSheets && orderGuideSheets.length) ? orderGuideSheets : ['RNDC'];
+    const list = templateSheetOptions_();
     select.innerHTML = list.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
   }
   function populateManageDistributorSheetList_(){
