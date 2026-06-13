@@ -1099,7 +1099,9 @@ function autoCreateDistributorEntry_(vendorName, categories, uiSettings, opts) {
 
   let blocks = [];
   if (sheet) {
-    blocks = getTableBlocksFromSheet_(sheet);
+    // getTables() is slow; skip it on hot paths (e.g. read-time seeding) and
+    // rely on the known default ordering blocks instead.
+    if (!options.skipTableScan) blocks = getTableBlocksFromSheet_(sheet);
     if (!blocks.length) blocks = getDefaultOrderingBlocksForSheet_(sheet);
   }
   const tableCount = Math.max(1, Math.min(10, blocks.length || 1));
@@ -1132,7 +1134,8 @@ function autoCreateDistributorEntry_(vendorName, categories, uiSettings, opts) {
   };
 }
 
-function autoSeedDistributorsFromInventory_(uiSettings, vendorMap) {
+function autoSeedDistributorsFromInventory_(uiSettings, vendorMap, opts) {
+  const options = opts && typeof opts === 'object' ? opts : {};
   let list = getDistributorsFromSettings_(uiSettings);
   const existing = new Set();
   list.forEach(d => {
@@ -1141,7 +1144,7 @@ function autoSeedDistributorsFromInventory_(uiSettings, vendorMap) {
   });
   const builtIn = new Set((CONFIG.VENDORS || []).map(v => norm_(v)));
   const added = [];
-  const seedOpts = { createSheet: false };
+  const seedOpts = { createSheet: false, skipTableScan: !!options.skipTableScan };
   (vendorMap || new Map()).forEach(entry => {
     const name = String(entry?.name || '').trim();
     const key = norm_(name);
@@ -1798,10 +1801,21 @@ function getInventData() {
     };
   }
 
+  // Lightweight phase timing — shows up in the Apps Script execution log so we
+  // can see exactly where load time goes.
+  let _t = Date.now();
+  const _mark = (label) => { const now = Date.now(); console.log(`getInventData ${label}: ${now - _t}ms`); _t = now; };
+
   const maxCol = Math.max(CONFIG.COL.NOTES, 18);
   const rng = sheet.getRange(1, 1, lastRow, maxCol);
   const display = rng.getDisplayValues();
-  const bgs = rng.getBackgrounds();
+  _mark('getDisplayValues');
+  // Backgrounds are only needed for the G/H/J lock state — read just those
+  // columns instead of the whole 18-column range (a much smaller, faster read).
+  const bgStartCol = CONFIG.COL.G;
+  const bgWidth = CONFIG.COL.J - CONFIG.COL.G + 1;
+  const bgs = sheet.getRange(1, bgStartCol, lastRow, bgWidth).getBackgrounds();
+  _mark('getBackgrounds');
 
   // Acquire lock for write operations (alias normalization, distributor seeding, distro sync)
   let vendorMap = new Map();
@@ -1810,7 +1824,9 @@ function getInventData() {
   try {
     normalizeVendorAliasesInDisplay_(sheet, display, VENDOR_ALIASES);
     vendorMap = collectVendorCategoriesFromDisplay_(display);
-    const seedRes = autoSeedDistributorsFromInventory_(uiSettings, vendorMap);
+    // skipTableScan avoids the slow getTables() call while seeding placeholder
+    // distributor entries on the read path.
+    const seedRes = autoSeedDistributorsFromInventory_(uiSettings, vendorMap, { skipTableScan: true });
     if (seedRes && seedRes.distributors) distributors = seedRes.distributors;
     distributors = ensureDistributorRefs_(distributors, uiSettings);
     if (shouldSyncDistroData_(uiSettings, distributors)) {
@@ -1819,6 +1835,7 @@ function getInventData() {
   } finally {
     if (dataLock) dataLock.releaseLock();
   }
+  _mark('lock+seed+distroSync');
   const vendorSet = new Set(CONFIG.VENDORS);
   distributors.forEach(d => {
     const name = String(d.name || '').trim();
@@ -1843,6 +1860,7 @@ function getInventData() {
   // Fetch all hidden-by-user rows in one call (falls back to per-row if the
   // Sheets advanced service isn't enabled).
   const hiddenRows = getHiddenRowSet_(ss, sheet.getName());
+  _mark('getHiddenRowSet');
 
   for (let r = 0; r < lastRow; r++) {
     const rowNum = r + 1;
@@ -1867,9 +1885,9 @@ function getInventData() {
       else seen.set(id, true);
 
       const editable = {
-        g: !isDarkLockedBg_(bgs[r][CONFIG.COL.G - 1]),
-        h: !isDarkLockedBg_(bgs[r][CONFIG.COL.H - 1]),
-        j: !isDarkLockedBg_(bgs[r][CONFIG.COL.J - 1])
+        g: !isDarkLockedBg_(bgs[r][CONFIG.COL.G - bgStartCol]),
+        h: !isDarkLockedBg_(bgs[r][CONFIG.COL.H - bgStartCol]),
+        j: !isDarkLockedBg_(bgs[r][CONFIG.COL.J - bgStartCol])
       };
 
       const vendor = String(display[r][CONFIG.COL.VENDOR - 1] || '').trim();
@@ -1902,6 +1920,7 @@ function getInventData() {
       });
     }
   }
+  _mark('rowLoop');
 
   return {
     headers: { g: 'BAR', h: 'OTHER', j: 'OFFICE' },
