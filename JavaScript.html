@@ -867,7 +867,7 @@ let manageDistKey = '';
     if (btn) {
       btn.classList.toggle('success', !!layoutEditMode);
       btn.classList.toggle('danger', !layoutEditMode);
-      btn.textContent = 'EDIT LAYOUT';
+      // Label is governed by HTML default / rename settings (e.g. "MOVE"); don't overwrite it here.
       btn.setAttribute('aria-pressed', layoutEditMode ? 'true' : 'false');
     }
     if (layoutEditMode) {
