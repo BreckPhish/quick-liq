@@ -1098,6 +1098,15 @@
       </div>
     </div>
   </div>
+  <!-- SEARCH RESULTS PALETTE (Layout Edit mode) -->
+  <div id="searchResultsPalette" class="searchPalette" style="display:none;">
+    <div class="searchPaletteHead">
+      <span>SEARCH RESULTS</span>
+      <button type="button" class="searchPaletteClose" onclick="closeSearchPalette_(true)" aria-label="Close">×</button>
+    </div>
+    <div class="searchPaletteHelp">Drag an item onto a section to add it there.</div>
+    <div id="searchPaletteList" class="searchPaletteList"></div>
+  </div>
   <?!= include('JavaScript') ?>
 </body>
 </html

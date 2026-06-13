@@ -850,6 +850,8 @@ let manageDistKey = '';
     layoutEditMode = !layoutEditMode;
     if (layoutEditMode) closeLayoutEditOverlays_();
     applyLayoutEditMode_();
+    // If a search is active, re-evaluate it for the new mode (focus vs palette).
+    if ((document.getElementById('q')?.value || '').trim()) applyFilter();
   }
   function applyLayoutEditMode_(){
     document.body.classList.toggle('layoutEditOn', layoutEditMode);
@@ -4278,6 +4280,10 @@ ${pagesHtml}
     const wasActive = searchActive;
     searchFocusTarget_ = null;
 
+    // Layout Edit + query: show the draggable results palette; otherwise hide it.
+    if (hasQuery && editMode) renderSearchPalette_(q);
+    else closeSearchPalette_(false);
+
     if (hasQuery && !editMode) {
       // Edit mode OFF: collapse everything and focus only the match under
       // BY BEVERAGE (falling back to the item's home location). Snapshot the
@@ -4393,6 +4399,106 @@ ${pagesHtml}
     (sectionsMeta || []).forEach(s => {
       if (s && s.key) collapsedByKey[s.key] = !expandSections.has(norm_(s.key));
     });
+  }
+  // ---- Layout-Edit search results palette (drag an item onto a section) ----
+  let paletteDrag_ = null;
+  function renderSearchPalette_(q){
+    const panel = document.getElementById('searchResultsPalette');
+    const list = document.getElementById('searchPaletteList');
+    if (!panel || !list) return;
+    const query = String(q || '').trim().toLowerCase();
+    const seen = new Set();
+    const matches = [];
+    (allRows || []).forEach(r => {
+      if (!r || r.type !== 'item') return;
+      const id = String(r.id || '').trim();
+      if (!id || seen.has(id)) return;
+      if (!String(r.b ?? '').toLowerCase().includes(query)) return;
+      seen.add(id);
+      matches.push({ id, name: String(r.b || ''), section: String(r.section || '') });
+    });
+    matches.sort((a, b) => a.name.localeCompare(b.name));
+    list.innerHTML = matches.length
+      ? matches.map(m => `<div class="searchPaletteItem" data-id="${escapeHtml(m.id)}"><span class="spName">${escapeHtml(m.name)}</span><span class="spSec">${escapeHtml(m.section)}</span></div>`).join('')
+      : `<div class="searchPaletteEmpty">No matches.</div>`;
+    panel.style.display = 'flex';
+    wireSearchPaletteDrag_();
+  }
+  function closeSearchPalette_(clearInput){
+    const panel = document.getElementById('searchResultsPalette');
+    if (panel) panel.style.display = 'none';
+    if (clearInput) {
+      const qi = document.getElementById('q');
+      if (qi) { qi.value = ''; applyFilter(); }
+    }
+  }
+  function wireSearchPaletteDrag_(){
+    document.querySelectorAll('#searchPaletteList .searchPaletteItem').forEach(el => {
+      if (el.dataset.bound === '1') return;
+      el.dataset.bound = '1';
+      el.addEventListener('pointerdown', onPalettePointerDown_);
+    });
+  }
+  function onPalettePointerDown_(e){
+    const el = e.currentTarget;
+    const id = el.getAttribute('data-id');
+    if (!id) return;
+    e.preventDefault();
+    const ghost = document.createElement('div');
+    ghost.className = 'searchPaletteGhost';
+    ghost.textContent = el.querySelector('.spName')?.textContent || id;
+    document.body.appendChild(ghost);
+    paletteDrag_ = { id, ghost };
+    movePaletteGhost_(e);
+    window.addEventListener('pointermove', onPalettePointerMove_);
+    window.addEventListener('pointerup', onPalettePointerUp_);
+    window.addEventListener('pointercancel', onPalettePointerUp_);
+  }
+  function movePaletteGhost_(e){
+    if (paletteDrag_ && paletteDrag_.ghost){
+      paletteDrag_.ghost.style.left = e.clientX + 'px';
+      paletteDrag_.ghost.style.top = e.clientY + 'px';
+    }
+  }
+  function clearPaletteDropHover_(){
+    document.querySelectorAll('.sectionDropHover').forEach(x => x.classList.remove('sectionDropHover'));
+  }
+  function paletteDropSectionFromPoint_(x, y){
+    const el = document.elementFromPoint(x, y);
+    if (!el || !el.closest) return null;
+    const body = el.closest('.sectionBody[data-section-body]');
+    if (body){
+      const key = body.getAttribute('data-section-body');
+      const head = document.querySelector(`.group[data-section-key="${cssEscape_(key)}"]`);
+      return { key, el: head || body };
+    }
+    const head = el.closest('.group[data-section-key]');
+    if (head) return { key: head.getAttribute('data-section-key'), el: head };
+    return null;
+  }
+  function onPalettePointerMove_(e){
+    if (!paletteDrag_) return;
+    movePaletteGhost_(e);
+    clearPaletteDropHover_();
+    const sec = paletteDropSectionFromPoint_(e.clientX, e.clientY);
+    if (sec && sec.el && sec.key && !isDynamicHomeSectionKey_(sec.key)) sec.el.classList.add('sectionDropHover');
+  }
+  function onPalettePointerUp_(e){
+    window.removeEventListener('pointermove', onPalettePointerMove_);
+    window.removeEventListener('pointerup', onPalettePointerUp_);
+    window.removeEventListener('pointercancel', onPalettePointerUp_);
+    const drag = paletteDrag_;
+    paletteDrag_ = null;
+    clearPaletteDropHover_();
+    if (drag && drag.ghost) drag.ghost.remove();
+    if (!drag) return;
+    const sec = paletteDropSectionFromPoint_(e.clientX, e.clientY);
+    if (!sec || !sec.key) return;
+    if (isDynamicHomeSectionKey_(sec.key)) return;        // not BY DISTRIBUTOR/BEVERAGE
+    const label = findSectionLabelByKey_(sec.key) || '';
+    if (isNeutralHomeLabel_(label)) return;               // not the hidden ALL ITEMS parking section
+    copyItemToSectionShortcut_(drag.id, sec.key);
+    setStatus(`Added item ${drag.id} to ${label || sec.key}.`);
   }
   function liveFieldValue_(id, field, fallback){
     const row = document.querySelector(`.itemRow[data-id="${cssEscape_(id)}"]`);
