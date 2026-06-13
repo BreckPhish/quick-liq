@@ -15,6 +15,7 @@ let vendors = [];
 let categories = [];
 let secondarySections = [];
 let sectionShortcuts = {};
+let archivedItems = new Set();
 let distributors = [];
 let orderGuideSheets = [];
 let orderGuideSheetNames = [];
@@ -2813,6 +2814,7 @@ ${pagesHtml}
     const el = document.getElementById('editOverlay');
     if (el) el.style.display = 'flex';
     updateEditMoveButtons_();
+    updateArchiveButtonLabel_();
   }
   function closeEditModal(){
     editModalOpen = false;
@@ -3842,6 +3844,7 @@ ${pagesHtml}
         syncInventoryColumnSettings_();
         secondarySections = data.secondarySections || [];
         sectionShortcuts = (uiSettings && typeof uiSettings.sectionShortcuts === 'object') ? uiSettings.sectionShortcuts : {};
+        archivedItems = new Set((Array.isArray(uiSettings.archivedItemIds) ? uiSettings.archivedItemIds : []).map(v => String(v || '').trim()).filter(Boolean));
         distributors = data.distributors || [];
         orderGuideSheets = data.orderGuideSheets || [];
         orderGuideSheetNames = data.orderGuideSheetNames || data.orderGuideSheets || [];
@@ -5334,9 +5337,10 @@ function appendLineEditorRow_(list, line, opts){
         const allow1 = baseAllow1 && groupAllow1 && isSectionColumnEnabled_(currentSectionLabel, 'g');
         const allow2 = baseAllow2 && groupAllow2 && isSectionColumnEnabled_(currentSectionLabel, 'h');
         const allow3 = baseAllow3 && groupAllow3 && isSectionColumnEnabled_(currentSectionLabel, 'j');
-        const canEdit1 = allow1 && !layoutEditMode;
-        const canEdit2 = allow2 && !layoutEditMode;
-        const canEdit3 = allow3 && !layoutEditMode;
+        const isArchived = isItemArchived_(itemId);
+        const canEdit1 = allow1 && !layoutEditMode && !isArchived;
+        const canEdit2 = allow2 && !layoutEditMode && !isArchived;
+        const canEdit3 = allow3 && !layoutEditMode && !isArchived;
         const numAttrs = `inputmode="decimal" pattern="[0-9]*" enterkeyhint="done" autocapitalize="off" autocomplete="off"`;
         const isRedWine = norm_(currentSectionLabel) === 'RED WINE';
         const isInUseItem = isRedWine && RED_WINE_INUSE_ITEMS.has(norm_(item.b));
@@ -5345,7 +5349,7 @@ function appendLineEditorRow_(list, line, opts){
           ? `<select data-field="h" data-base-allow="${baseAllow2 ? '1' : '0'}" ${canEdit2 ? '' : 'disabled'}>${makeInUseOptions_(item.h)}</select>`
           : `<input type="text" ${numAttrs} data-field="h" data-base-allow="${baseAllow2 ? '1' : '0'}" value="${escapeHtml(item.h)}" ${canEdit2 ? "" : "disabled"} />`;
         out += `
-          <div class="itemRow ${zebraClass}" data-id="${idEsc}" data-section-label="${escapeHtml(currentSectionLabel)}" data-section-key="${escapeHtml(currentSectionKey)}" data-section-type="${escapeHtml(item.sectionType || 'home')}" title="${escapeHtml(item.b)} (ID ${idEsc})">
+          <div class="itemRow ${zebraClass}${isArchived ? ' archived' : ''}" data-id="${idEsc}" data-section-label="${escapeHtml(currentSectionLabel)}" data-section-key="${escapeHtml(currentSectionKey)}" data-section-type="${escapeHtml(item.sectionType || 'home')}"${isArchived ? ' data-archived="1"' : ''} title="${escapeHtml(item.b)} (ID ${idEsc})">
             <button class="itemEditBtn" type="button" title="Edit item" aria-label="Edit item" data-item-id="${idEsc}" data-btn-key="item-edit" data-btn-rename="1" data-btn-icon="1" data-btn-default="Edit item">
               <svg class="editIcon" viewBox="0 0 24 24" stroke-width="1.5" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                 <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
@@ -7416,6 +7420,67 @@ function buildLeftNav_(){
         deleteEditItem_();
       });
     }
+    const arch = document.getElementById('editArchiveBtn');
+    if (arch && arch.dataset.bound !== "1") {
+      arch.dataset.bound = "1";
+      arch.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleArchiveEditItem_();
+      });
+    }
+  }
+  function isItemArchived_(id){
+    return archivedItems.has(String(id || '').trim());
+  }
+  function updateArchiveButtonLabel_(){
+    const btn = document.getElementById('editArchiveBtn');
+    if (!btn) return;
+    btn.textContent = isItemArchived_(editModalItemId) ? 'Unarchive' : 'Archive';
+  }
+  function toggleArchiveEditItem_(){
+    const id = String(editModalItemId || '').trim();
+    if (!id) return;
+    const willArchive = !isItemArchived_(id);
+    const item = findItemById_(id) || {};
+    const vendor = String(item.vendor ?? item.o ?? '').trim();
+    const categoryN = String(item.categoryN ?? '').trim();
+    closeEditModal();
+    // Optimistic local update so the UI grays/restores immediately.
+    if (willArchive) archivedItems.add(id); else archivedItems.delete(id);
+    applyFilter();
+    setSavePill("saving", "Saving…");
+    setStatus(willArchive ? `Archiving item ${id}…` : `Unarchiving item ${id}…`);
+    setBanner(null, null);
+    google.script.run
+      .withSuccessHandler(res => {
+        if (!res || res.ok === false) {
+          setSavePill("err", "Error");
+          setBanner("warn", (res && res.message) || "Archive update failed.");
+          // Revert optimistic change.
+          if (willArchive) archivedItems.delete(id); else archivedItems.add(id);
+          applyFilter();
+          return;
+        }
+        // Sync from the server's authoritative list.
+        if (Array.isArray(res.archivedItemIds)) {
+          archivedItems = new Set(res.archivedItemIds.map(v => String(v || '').trim()).filter(Boolean));
+          uiSettings = uiSettings && typeof uiSettings === 'object' ? uiSettings : {};
+          uiSettings.archivedItemIds = res.archivedItemIds.slice();
+        }
+        setSavePill("ok", "Saved");
+        setStatus(willArchive
+          ? `Archived item ${id} (removed from its order guide).`
+          : `Unarchived item ${id} (restored to its order guide).`);
+        applyFilter();
+      })
+      .withFailureHandler(err => {
+        setSavePill("err", "Error");
+        setBanner("error", "Archive error: " + (err && err.message ? err.message : err));
+        if (willArchive) archivedItems.delete(id); else archivedItems.add(id);
+        applyFilter();
+      })
+      .setItemArchived({ id, archived: willArchive, vendor, categoryN });
   }
   function duplicateEditItem_(){
     if (!editModalItemId) return;
