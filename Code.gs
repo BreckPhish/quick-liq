@@ -2998,6 +2998,14 @@ function syncOrderingForItem_(id, vendor, categoryN, options, distributorsOverri
   if (!idStr) return { ok: false, skipped: true, message: 'Missing ID for ordering sync.' };
 
   const existing = findOrderingRowsForId_(ss, idStr);
+
+  // Archived items must never live in an order guide — strip them and stop,
+  // even if a later vendor/category edit would otherwise re-add them.
+  if (getArchivedItemIds_().has(idStr)) {
+    if (existing.length) removeOrderingRows_(existing);
+    return { ok: true, archivedSkip: true };
+  }
+
   const target = resolveOrderingTargetTable_(vendor, categoryN, distributorsOverride);
   if (!target.ok) {
     if (existing.length) removeOrderingRows_(existing);
@@ -4334,6 +4342,45 @@ function addInventItem(payload) {
   } finally {
     if (lock) lock.releaseLock();
   }
+}
+
+/** Set of archived item IDs (input disabled in the UI, excluded from order guides). */
+function getArchivedItemIds_() {
+  const ui = getUiSettings_();
+  const list = (ui && Array.isArray(ui.archivedItemIds)) ? ui.archivedItemIds : [];
+  return new Set(list.map(v => String(v || '').trim()).filter(Boolean));
+}
+
+/**
+ * Archive or unarchive an item. Archiving records the ID in settings and removes
+ * the item from its distributor order guide(s); unarchiving clears the flag and
+ * re-adds it to the correct order-guide table (vendor/categoryN supplied by the
+ * client). The item's INVENT row is never touched.
+ */
+function setItemArchived(payload) {
+  const id = String(payload?.id || '').trim();
+  if (!id) return { ok: false, message: 'Item ID is required.' };
+  const archived = !!payload?.archived;
+
+  const uiSettings = getUiSettings_();
+  const set = new Set(
+    (Array.isArray(uiSettings.archivedItemIds) ? uiSettings.archivedItemIds : [])
+      .map(v => String(v || '').trim()).filter(Boolean)
+  );
+  if (archived) set.add(id); else set.delete(id);
+  uiSettings.archivedItemIds = Array.from(set);
+  saveUiSettings(uiSettings);
+
+  const ss = getSpreadsheet_();
+  if (archived) {
+    const rows = findOrderingRowsForId_(ss, id);
+    if (rows.length) removeOrderingRows_(rows);
+    return { ok: true, archived: true, archivedItemIds: uiSettings.archivedItemIds, removedFromOrder: rows.length };
+  }
+  // Unarchive: the ID is already out of the archived set above, so the sync
+  // guard won't block re-adding it to its order-guide table.
+  const sync = syncOrderingForItem_(id, String(payload?.vendor || '').trim(), String(payload?.categoryN || '').trim(), { touch: false });
+  return { ok: true, archived: false, archivedItemIds: uiSettings.archivedItemIds, sync };
 }
 
 function deleteInventItem(payload) {

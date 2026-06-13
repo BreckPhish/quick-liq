@@ -450,6 +450,9 @@
   position:relative;
 }
 .itemRow .cell.fieldCellHidden{ display:none; }
+.itemRow.archived{ opacity:0.5; }
+.itemRow.archived .itemName{ text-decoration: line-through; }
+.itemRow.archived input, .itemRow.archived select{ cursor: not-allowed; }
 .itemRow.zebra{ background:#16253f; }
 .itemRow.rowFocus{
   border-color: rgba(255,255,255,0.95);
