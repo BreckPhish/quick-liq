@@ -89,6 +89,8 @@ let savePillState = "idle";
 let searchActive = false;
 let searchCollapsedSnapshot = null;
 let groupCollapsedSnapshot = null;
+let searchScrollSnapshot = 0;
+let searchFocusTarget_ = null;
 const PENDING_EDITS_KEY = "invent_pending_edits_v1";
 const PENDING_META_KEY = "invent_pending_meta_v1";
 let pendingEdits = new Map();
@@ -4272,78 +4274,125 @@ ${pagesHtml}
     filterDebounceTimer = 0;
     const q = (document.getElementById("q").value || "").trim().toLowerCase();
     const hasQuery = !!q;
-    if (hasQuery) {
+    const editMode = !!layoutEditMode;
+    const wasActive = searchActive;
+    searchFocusTarget_ = null;
+
+    if (hasQuery && !editMode) {
+      // Edit mode OFF: collapse everything and focus only the match under
+      // BY BEVERAGE (falling back to the item's home location). Snapshot the
+      // prior view so Clear can restore it.
       if (!searchActive) {
         searchActive = true;
         searchCollapsedSnapshot = { ...(collapsedByKey || {}) };
         groupCollapsedSnapshot = { ...(groupCollapsedByKey || {}) };
+        searchScrollSnapshot = window.pageYOffset || 0;
       }
-      sectionsMeta.forEach(s => { collapsedByKey[s.key] = false; });
-      getRenderGroups_().forEach(g => {
-        const key = getGroupKeyClient_(g);
-        if (key) groupCollapsedByKey[key] = false;
-      });
-    } else if (searchActive) {
+      focusSearchUnderByBeverage_(q);
+    } else if (!hasQuery && searchActive) {
+      // Clear: restore the pre-search collapse configuration (and scroll).
       const restored = searchCollapsedSnapshot || {};
       collapsedByKey = { ...restored };
       sectionsMeta.forEach(s => {
-        if (!Object.prototype.hasOwnProperty.call(collapsedByKey, s.key)) {
-          collapsedByKey[s.key] = false;
-        }
+        if (!Object.prototype.hasOwnProperty.call(collapsedByKey, s.key)) collapsedByKey[s.key] = false;
       });
       saveCollapsed_(collapsedByKey);
       const groupRestored = groupCollapsedSnapshot || {};
       groupCollapsedByKey = { ...groupRestored };
       getRenderGroups_().forEach(g => {
         const key = getGroupKeyClient_(g);
-        if (!key) return;
-        if (!Object.prototype.hasOwnProperty.call(groupCollapsedByKey, key)) {
-          groupCollapsedByKey[key] = false;
-        }
+        if (key && !Object.prototype.hasOwnProperty.call(groupCollapsedByKey, key)) groupCollapsedByKey[key] = false;
       });
       saveGroupCollapsed_(groupCollapsedByKey);
       searchActive = false;
       searchCollapsedSnapshot = null;
       groupCollapsedSnapshot = null;
     }
+    // Edit mode ON + query: intentionally leave the current collapse state alone
+    // (don't collapse the group/section being worked on).
+
+    // Always render the full structure now; search "focuses" via collapse state
+    // rather than hiding non-matching sections.
     const out = [];
     let currentHeader = null;
     let buffer = [];
-    let hasMatch = false;
     function flush(){
-      const includeEmpty = !hasQuery && currentHeader && String(currentHeader.dynamicType || '') === 'type';
-      if (currentHeader && (hasQuery ? hasMatch : buffer.length > 0 || includeEmpty)){
+      const includeEmpty = currentHeader && String(currentHeader.dynamicType || '') === 'type';
+      if (currentHeader && (buffer.length > 0 || includeEmpty)){
         out.push(currentHeader);
         out.push(...buffer);
       }
       currentHeader = null;
       buffer = [];
-      hasMatch = false;
     }
     for (const r of allRows){
       if (!r) continue;
-      if (r.type === "header"){
-        flush();
-        currentHeader = r;
-        continue;
-      }
-      if (r.type === "item"){
-        if (!hasQuery){
-          buffer.push(r);
-        } else {
-          const match = String(r.b ?? "").toLowerCase().includes(q);
-          if (match){
-            hasMatch = true;
-            buffer.push(r);
-          }
-        }
-      }
+      if (r.type === "header"){ flush(); currentHeader = r; continue; }
+      if (r.type === "item"){ buffer.push(r); }
     }
     flush();
     lastFilteredRows = out;
     render(out);
     buildRightNav_();
     setStatus(summary_(allRows));
+
+    if (hasQuery && !editMode && searchFocusTarget_) {
+      const t = searchFocusTarget_;
+      if (t.sectionKey) scrollToSectionHeading_(t.sectionKey);
+      const row = (t.id && t.sectionKey
+        ? document.querySelector(`.sectionBody[data-section-body="${cssEscape_(t.sectionKey)}"] .itemRow[data-id="${cssEscape_(t.id)}"]`)
+        : null) || (t.id ? document.querySelector(`.itemRow[data-id="${cssEscape_(t.id)}"]`) : null);
+      if (row) {
+        try { row.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) {}
+        flash_(row, 'blue');
+      }
+    } else if (!hasQuery && wasActive) {
+      const y = searchScrollSnapshot || 0;
+      try { window.scrollTo({ top: y, behavior: 'smooth' }); } catch (e) { window.scrollTo(0, y); }
+    }
+  }
+  // Edit-mode-OFF search: collapse all groups/sections except BY BEVERAGE and
+  // the matched item's category section; fall back to the item's home location
+  // if it has no beverage category. Sets searchFocusTarget_ for scroll/flash.
+  function focusSearchUnderByBeverage_(q){
+    let target = null;   // match under a BY BEVERAGE (type) section
+    let firstAny = null; // any match (fallback)
+    let curKey = '';
+    let curIsType = false;
+    for (const r of allRows){
+      if (!r) continue;
+      if (r.type === 'header'){
+        curKey = String(r.key || '');
+        curIsType = String(r.dynamicType || '') === 'type';
+        continue;
+      }
+      if (r.type === 'item'){
+        if (!String(r.b ?? '').toLowerCase().includes(q)) continue;
+        if (!firstAny) firstAny = { id: String(r.id || '') };
+        if (curIsType && !target) target = { sectionKey: curKey, id: String(r.id || '') };
+      }
+    }
+    const expandGroups = new Set();
+    const expandSections = new Set();
+    if (target) {
+      expandGroups.add(norm_(ALL_ITEMS_GROUP_KEY));
+      expandGroups.add(norm_(TYPE_GROUP_KEY));
+      expandSections.add(norm_(target.sectionKey));
+      searchFocusTarget_ = target;
+    } else if (firstAny) {
+      const item = findItemById_(firstAny.id);
+      const homeKey = makeSectionKeyClient_(item?.section || '');
+      if (homeKey) expandSections.add(norm_(homeKey));
+      getGroupChainForSectionKey_(homeKey).forEach(meta => { if (meta && meta.key) expandGroups.add(norm_(meta.key)); });
+      searchFocusTarget_ = { sectionKey: homeKey, id: firstAny.id };
+    }
+    getRenderGroups_().forEach(g => {
+      const key = getGroupKeyClient_(g);
+      if (key) groupCollapsedByKey[key] = !expandGroups.has(norm_(key));
+    });
+    (sectionsMeta || []).forEach(s => {
+      if (s && s.key) collapsedByKey[s.key] = !expandSections.has(norm_(s.key));
+    });
   }
   function liveFieldValue_(id, field, fallback){
     const row = document.querySelector(`.itemRow[data-id="${cssEscape_(id)}"]`);
