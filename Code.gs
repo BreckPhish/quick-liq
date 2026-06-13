@@ -4513,7 +4513,16 @@ function deleteInventSections(payload) {
     }
   }
 
-  if (!headers.length) return { ok: false, message: 'No matching sections found.' };
+  // Settings-only sections (secondary / location shortcuts) have no INVENT
+  // header but still need to be deletable. Only bail if nothing at all matches.
+  const settingsForCheck = getUiSettings_();
+  const secondaryForCheck = Array.isArray(settingsForCheck.secondarySections) ? settingsForCheck.secondarySections : [];
+  const secondaryMatched = secondaryForCheck.some(sec =>
+    keySet.has(norm_(sec?.key || sec?.label || sec?.heading || '')) ||
+    labelSet.has(norm_(sec?.label || sec?.heading || '')));
+  if (!headers.length && !secondaryMatched) {
+    return { ok: false, message: 'No matching sections found.' };
+  }
 
   const rowsToDelete = new Set();
   const itemIds = new Set();
@@ -4543,8 +4552,12 @@ function deleteInventSections(payload) {
     if (lock) lock.releaseLock();
   }
 
+  // Include every selected key/label (not just found INVENT headers) so
+  // secondary/location sections get cleaned from settings and groups too.
   const removedKeyNorms = new Set(headers.map(h => norm_(h.key || '')));
   const removedLabelNorms = new Set(headers.map(h => norm_(h.label || '')));
+  keySet.forEach(k => removedKeyNorms.add(k));
+  labelSet.forEach(l => removedLabelNorms.add(l));
 
   const uiSettings = getUiSettings_();
   const nextSettings = uiSettings && typeof uiSettings === 'object' ? uiSettings : {};

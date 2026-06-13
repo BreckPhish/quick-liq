@@ -72,6 +72,16 @@
       gap:8px;
     }
     .orderGuidesBtn{ justify-self:center; }
+    /* EDIT LAYOUT pinned to the top-right, just above the right ribbon, for quick access. */
+    #toggleLayoutEditBtn.layoutEditFab{
+      position: fixed;
+      top: calc(112px + var(--navOffsetY) - 42px);
+      right: max(8px, env(safe-area-inset-right, 0px));
+      z-index: 31;
+      padding: 6px 10px;
+      font-size: 11px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+    }
     #savePill{ justify-self:end; }
     .topRow{
       display:flex; align-items:flex-start; justify-content:space-between;
