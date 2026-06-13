@@ -1710,6 +1710,59 @@ function copyFormatBlock_(sheet, exampleRow, newRow, colStart, colEnd) {
 }
 
 /**
+ * ONE-TIME MAINTENANCE — shrink a bloated sheet.
+ *
+ * Google Sheets can accumulate formatting across all 16,384 columns (and
+ * thousands of empty rows), which inflates the file to many MB and makes every
+ * operation — including app load and adding distributors — slow. This deletes
+ * the columns past the real data and the trailing empty rows.
+ *
+ * Run from the Apps Script editor: select `compactInventSheet` and press Run.
+ * It keeps columns A..Z (the data ends well before that) plus a small row
+ * buffer, so it is safe for this app's schema. The return value reports what
+ * was removed. After running, reload the web app — it should be far faster.
+ */
+function compactInventSheet() {
+  const ss = getSpreadsheet_();
+  const sheet = ss.getSheetByName(CONFIG.INVENT_SHEET);
+  if (!sheet) throw new Error(`Missing sheet: ${CONFIG.INVENT_SHEET}`);
+  const res = compactSheet_(sheet, 26, 25);
+  SpreadsheetApp.flush();
+  return res;
+}
+
+/** Deletes columns past keepCols and rows past (lastRow + rowBuffer). */
+function compactSheet_(sheet, keepCols, rowBuffer) {
+  const keep = Math.max(1, Number(keepCols) || 26);
+  const buffer = Math.max(0, Number(rowBuffer) || 0);
+  let removedCols = 0;
+  let removedRows = 0;
+
+  const maxCols = sheet.getMaxColumns();
+  if (maxCols > keep) {
+    sheet.deleteColumns(keep + 1, maxCols - keep);
+    removedCols = maxCols - keep;
+  }
+
+  const lastRow = Math.max(sheet.getLastRow(), 1);
+  const keepRows = lastRow + buffer;
+  const maxRows = sheet.getMaxRows();
+  if (maxRows > keepRows) {
+    sheet.deleteRows(keepRows + 1, maxRows - keepRows);
+    removedRows = maxRows - keepRows;
+  }
+
+  return {
+    ok: true,
+    sheet: sheet.getName(),
+    removedCols,
+    removedRows,
+    columnsNow: sheet.getMaxColumns(),
+    rowsNow: sheet.getMaxRows()
+  };
+}
+
+/**
  * Returns a Set of 1-based row numbers that are hidden-by-user, fetched in a
  * SINGLE Sheets API call. Calling Sheet.isRowHiddenByUser() per row is a
  * backend round-trip each, which made loads take minutes on large sheets.
