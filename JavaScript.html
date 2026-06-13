@@ -262,6 +262,14 @@ let manageDistKey = '';
   function isNeutralHomeLabel_(label){
     return norm_(label) === norm_(NEUTRAL_HOME_LABEL);
   }
+  // A user-created secondary/location section (has a stored item order) — its
+  // rows can be drag-reordered, unlike the auto-sorted dynamic groups.
+  function isReorderableSecondarySection_(sectionKey){
+    const key = String(sectionKey || '').trim();
+    if (!key || isDynamicHomeSectionKey_(key)) return false;
+    return (Array.isArray(secondarySections) ? secondarySections : [])
+      .some(s => String(s && s.key || '') === key);
+  }
   // ALL ITEMS and its dynamic children can't be deleted as groups.
   function isProtectedGroupKey_(key){
     const n = norm_(key || '');
@@ -4136,8 +4144,9 @@ ${pagesHtml}
       const key = sec.key || makeSectionKeyClient_(label);
       rows.push({ type: 'header', label, key, row: null, sectionType: 'secondary' });
       const ids = Array.isArray(sec.itemIds) ? sec.itemIds : [];
+      // Render in stored itemIds order so manual reordering sticks (secondary
+      // locations are user-orderable, unlike the auto-sorted dynamic groups).
       const items = ids.map(id => baseItems.get(String(id || ''))).filter(Boolean);
-      items.sort((a, b) => String(a.b || '').localeCompare(String(b.b || '')));
       items.forEach(item => {
         rows.push(Object.assign({}, item, {
           section: label,
@@ -6355,7 +6364,10 @@ function buildLeftNav_(){
       type = 'line';
       sourceEl = lineRow;
     } else if (itemRow) {
-      if (itemRow.getAttribute('data-section-type') === 'secondary') return;
+      // Secondary rows are draggable only inside a reorderable secondary section
+      // (not shortcuts pinned into home sections, not the dynamic groups).
+      if (itemRow.getAttribute('data-section-type') === 'secondary' &&
+          !isReorderableSecondarySection_(itemRow.getAttribute('data-section-key') || '')) return;
       type = 'item';
       sourceEl = itemRow;
     } else if (groupHeader) {
@@ -6449,7 +6461,12 @@ function buildLeftNav_(){
   function getLayoutItemDropTarget_(hit, clientX, clientY, sourceEl){
     const row = hit.closest('.itemRow[data-id]');
     if (row && row !== sourceEl) {
-      if (row.getAttribute('data-section-type') === 'secondary') return null;
+      if (row.getAttribute('data-section-type') === 'secondary') {
+        // Allow only reordering within the same reorderable secondary section.
+        const rKey = row.getAttribute('data-section-key') || '';
+        const sKey = sourceEl ? (sourceEl.getAttribute('data-section-key') || '') : '';
+        if (!isReorderableSecondarySection_(rKey) || norm_(rKey) !== norm_(sKey)) return null;
+      }
       const rect = row.getBoundingClientRect();
       const before = clientY < rect.top + rect.height / 2;
       return {
@@ -6673,6 +6690,33 @@ function buildLeftNav_(){
       })
       .saveInventEdits([{ id, vendor }]);
   }
+  function reorderSecondaryItem_(sectionKey, sourceId, targetId, position){
+    const key = String(sectionKey || '').trim();
+    const sid = String(sourceId || '').trim();
+    const tid = String(targetId || '').trim();
+    if (!key || !sid || !tid || sid === tid) return;
+    const sec = (Array.isArray(secondarySections) ? secondarySections : [])
+      .find(s => String(s && s.key || '') === key);
+    if (!sec || !Array.isArray(sec.itemIds)) return;
+    let ids = sec.itemIds.map(x => String(x || '').trim()).filter(Boolean);
+    ids = ids.filter(x => x !== sid);
+    const idx = ids.indexOf(tid);
+    if (idx === -1) return;
+    ids.splice(position === 'after' ? idx + 1 : idx, 0, sid);
+    sec.itemIds = ids;
+    uiSettings = uiSettings && typeof uiSettings === 'object' ? uiSettings : {};
+    uiSettings.secondarySections = secondarySections;
+    rebuildAllRows_();
+    applyFilter();
+    setSavePill("saving", "Saving…");
+    google.script.run
+      .withSuccessHandler(() => { setSavePill("ok", "Saved"); })
+      .withFailureHandler(err => {
+        setSavePill("err", "Error");
+        setBanner("error", "Reorder save error: " + (err && err.message ? err.message : err));
+      })
+      .saveUiSettings(uiSettings);
+  }
   function performLayoutItemDrop_(drop, sourceEl){
     const sourceId = sourceEl?.getAttribute('data-id') || '';
     if (!sourceId) return;
@@ -6686,6 +6730,14 @@ function buildLeftNav_(){
       const targetSectionKey = targetRow?.getAttribute('data-section-key') || '';
       const targetIsDistributor = isDistributorSectionKey_(targetSectionKey);
       if (!targetId || targetId === sourceId) return;
+      // Reorder within a secondary/location section (stored item order).
+      if (sourceEl?.getAttribute('data-section-type') === 'secondary' &&
+          targetRow?.getAttribute('data-section-type') === 'secondary' &&
+          norm_(sourceSectionKey) === norm_(targetSectionKey) &&
+          isReorderableSecondarySection_(sourceSectionKey)) {
+        reorderSecondaryItem_(sourceSectionKey, sourceId, targetId, drop.position);
+        return;
+      }
       if (!targetSection) return;
       if (targetIsDistributor) {
         moveItemToDistributor_(sourceId, targetSection);
