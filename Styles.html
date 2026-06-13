@@ -368,7 +368,7 @@
     }
     .groupSub.sectionSubGrid{
       display:grid;
-      grid-template-columns: repeat(3, minmax(40px, 0.6fr));
+      grid-template-columns: repeat(3, minmax(0, 0.8fr));
       gap:8px;
       align-items:center;
       justify-items:end;
@@ -438,7 +438,7 @@
     .sectionBody.hidden{ display:none; }
 .itemRow{
   display:grid;
-  grid-template-columns: minmax(170px, 2.6fr) minmax(40px, 0.6fr) minmax(40px, 0.6fr) minmax(40px, 0.6fr);
+  grid-template-columns: minmax(0, 2.4fr) repeat(3, minmax(46px, 0.8fr));
   gap:8px;
   align-items:center;
   background:var(--card);
@@ -527,15 +527,8 @@
     }
     @media (max-width: 520px){
       .itemRow{
-        grid-template-columns: minmax(140px, 2.8fr) minmax(36px, 0.6fr) minmax(36px, 0.6fr) minmax(36px, 0.6fr);
+        grid-template-columns: minmax(0, 2.6fr) repeat(3, minmax(40px, 0.8fr));
         gap:8px;
-      }
-      .itemName{
-        text-align:right; justify-self:end;
-        white-space:normal;
-        display:-webkit-box;
-        -webkit-line-clamp:2;
-        -webkit-box-orient:vertical;
       }
       .cell input, .cell select{ padding:9px 8px; font-size:16px; }
     }
@@ -1460,7 +1453,7 @@
        item names a little more room than the cramped desktop default. */
     @media (min-width: 521px) and (max-width: 1024px){
       .itemRow{
-        grid-template-columns: minmax(160px, 2.4fr) minmax(56px, 0.7fr) minmax(56px, 0.7fr) minmax(56px, 0.7fr);
+        grid-template-columns: minmax(0, 2.4fr) repeat(3, minmax(52px, 0.8fr));
       }
       .cell input, .cell select{ padding:12px 10px; font-size:16px; }
       .modal{ max-height: 82vh; }
