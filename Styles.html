@@ -113,14 +113,24 @@
       box-shadow: 0 8px 24px rgba(0,0,0,0.5);
     }
     .sectionDropHover{ outline: 3px solid var(--addYellowA) !important; outline-offset: 1px; }
-    /* EDIT LAYOUT pinned to the top-right, just above the right ribbon, for quick access. */
+    /* MOVE button: square ribbon-shaped, pinned top-right above the email button / right ribbon. */
     #toggleLayoutEditBtn.layoutEditFab{
       position: fixed;
-      top: calc(112px + var(--navOffsetY) - 42px);
+      top: calc(112px + var(--navOffsetY) - var(--navBtnH) - 8px);
       right: max(8px, env(safe-area-inset-right, 0px));
       z-index: 31;
-      padding: 6px 10px;
+      width: var(--rightNavW);
+      min-width: 0;
+      height: var(--navBtnH);
+      padding: 0;
+      border-radius: 12px;
+      border: 2px solid rgba(255,255,255,0.18);
+      display: flex;
+      align-items: center;
+      justify-content: center;
       font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.2px;
       box-shadow: 0 4px 14px rgba(0,0,0,0.45);
     }
     #savePill{ justify-self:end; }
