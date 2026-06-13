@@ -2796,7 +2796,7 @@ ${pagesHtml}
   }
   /* EDIT MODAL */
   function openEditModalFromRow(id, rowEl){
-    if (blockLayoutInput_('edit items')) return;
+    // Allowed during Layout Edit mode — drag is disabled while a modal is open.
     const item = findItemById_(id);
     if (!item){
       window.alert("Item not found.");
@@ -9357,7 +9357,7 @@ function buildLeftNav_(){
       .saveUiSettings(uiSettings);
   }
   function openGroupEditModal_(groupKey){
-    if (blockLayoutInput_('edit groups')) return;
+    // Allowed during Layout Edit mode — drag is disabled while a modal is open.
     const key = String(groupKey || '').trim();
     if (!key) return;
     const group = findGroupByKey_(key);
