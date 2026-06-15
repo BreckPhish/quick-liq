@@ -594,9 +594,11 @@ body:not(.layoutEditOn) .itemRow.behindBarDragRow .cell[data-field-cell="j"] .la
     .label{
       font-size:11px; color:var(--muted);
       font-weight:750; letter-spacing:0.2px; line-height:1;
-      display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+      display:flex; align-items:center; gap:6px; flex-wrap:nowrap;
       justify-content:flex-end;
       text-align:right;
+      min-width:0;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
     }
 .cell input, .cell select{
   width:100%;
@@ -650,6 +652,28 @@ body:not(.layoutEditOn) .itemRow.behindBarDragRow .cell[data-field-cell="j"] .la
         gap:8px;
       }
       .cell input, .cell select{ padding:9px 8px; font-size:16px; }
+    }
+    /* Samsung Galaxy Tab A9+ and similar tablets (CSS viewport ~800-1366px in
+       either orientation): keep every inventory row on a single line — the item
+       name and the field labels must never wrap or grow the row. */
+    @media (min-width: 600px) and (max-width: 1366px){
+      .itemRow{ align-items:center; }
+      .itemRow .itemName{
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+      }
+      .itemRow .label{
+        flex-wrap:nowrap;
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+        min-width:0;
+      }
+    }
+    /* Touch parity: single- and double-tap gestures on tappable controls fire
+       immediately (no 300ms delay) and double-tap-to-zoom never eats them,
+       while the page keeps pinch-to-zoom. Pointer-drag surfaces are excluded
+       here because they set touch-action:none for their drag gesture. */
+    button, .tabBtn, .groupHeading, .group, .lineRow,
+    .undoBtn, .colorSwatch, [role="button"]{
+      touch-action: manipulation;
     }
     .status{ margin:12px 0 24px; color:var(--muted); font-size:13px; white-space:pre-wrap; }
     .rightNav{
@@ -1184,10 +1208,14 @@ body:not(.layoutEditOn) .itemRow.behindBarDragRow .cell[data-field-cell="j"] .la
   body.layoutEditOn .groupHeading{
     cursor: grab;
     user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
   }
   body.layoutEditOn .lineRow{
     cursor: grab;
     user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
   }
   .layoutDropLine{
     position: fixed;
