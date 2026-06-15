@@ -523,7 +523,7 @@
     .sectionBody.hidden{ display:none; }
 .itemRow{
   display:grid;
-  grid-template-columns: minmax(0, 2.4fr) repeat(3, minmax(46px, 0.8fr));
+  grid-template-columns: minmax(0, 3fr) repeat(3, minmax(46px, 0.72fr));
   gap:8px;
   align-items:center;
   background:var(--card);
@@ -576,7 +576,7 @@ body:not(.layoutEditOn) .itemRow.behindBarDragRow .cell[data-field-cell="j"] .la
 }
 .itemName{
   font-weight:850; line-height:1.15; font-size:14px;
-  text-align:right; justify-self:end;
+  text-align:right; justify-self:stretch; width:100%; min-width:0;
       overflow:hidden; text-overflow:ellipsis;
       white-space:nowrap;
   transform: scale(1);

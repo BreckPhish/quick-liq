@@ -5240,6 +5240,37 @@ ${pagesHtml}
     applyButtonSettings_();
     applyInputVisibilitySettings_();
     applyLayoutEditMode_();
+    fitItemNames_();
+  }
+  // Shrink each item name's font just enough to show the whole name on a
+  // single line within its column (down to a readable floor). Reads and writes
+  // are batched to avoid layout thrash. Width scales ~linearly with font size,
+  // so one measurement gives the target size without an iterative loop.
+  const ITEM_NAME_BASE_FONT = 14;
+  const ITEM_NAME_MIN_FONT = 8;
+  let itemNameFitRaf_ = 0;
+  function fitItemNames_(){
+    const container = document.getElementById('rows');
+    if (!container) return;
+    const names = container.querySelectorAll('.itemName');
+    if (!names.length) return;
+    // Reset to the base font so measurements start from a known size.
+    names.forEach(el => { el.style.fontSize = ''; });
+    // Read pass: measure overflow for every name (single reflow).
+    const targets = [];
+    names.forEach(el => {
+      const cw = el.clientWidth;
+      const sw = el.scrollWidth;
+      if (cw > 0 && sw > cw + 1){
+        const ratio = cw / sw;
+        // Slight safety margin so the last glyph isn't clipped.
+        let size = ITEM_NAME_BASE_FONT * ratio * 0.97;
+        size = Math.max(ITEM_NAME_MIN_FONT, Math.floor(size * 100) / 100);
+        targets.push([el, size]);
+      }
+    });
+    // Write pass.
+    targets.forEach(([el, size]) => { el.style.fontSize = size + 'px'; });
   }
   function buildSectionBlocks_(rows){
     const blocks = [];
@@ -11553,6 +11584,10 @@ function buildLeftNav_(){
     }
     cacheDefaultUi_();
     wireKeyboardAwareSearch_();
+    window.addEventListener('resize', () => {
+      if (itemNameFitRaf_) cancelAnimationFrame(itemNameFitRaf_);
+      itemNameFitRaf_ = requestAnimationFrame(fitItemNames_);
+    });
     showPage_(currentPage);
     refresh({ mode: 'percent' });
   }
