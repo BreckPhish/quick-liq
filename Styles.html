@@ -113,6 +113,71 @@
       box-shadow: 0 8px 24px rgba(0,0,0,0.5);
     }
     .sectionDropHover{ outline: 3px solid var(--addYellowA) !important; outline-offset: 1px; }
+    /* ---- Batch cocktail recipes ---- */
+    .batchIconBtn{
+      width:32px; height:32px;
+      display:inline-flex; align-items:center; justify-content:center;
+      border-radius:8px; border:1px solid var(--card); background:var(--card);
+      color:var(--text); font-size:14px; font-weight:900; padding:0; text-transform:none;
+    }
+    .batchIconBtn .editIcon{ width:18px; height:18px; display:block; }
+    .batchIconBtn:hover{ border-color: rgba(255,255,255,0.26); }
+    .batchGroupHeading{ border-color: rgba(120,200,255,0.45); }
+    .batchSectionSub{ color: var(--muted); font-size:11px; font-weight:700; }
+    .batchCountWrap{
+      display:flex; flex-direction:column; align-items:center; gap:2px; margin-right:8px;
+    }
+    .batchCountLabel{ font-size:9px; font-weight:900; letter-spacing:0.4px; color:var(--muted); }
+    .batchCountInput{
+      width:54px; text-align:center; font-weight:900; font-size:15px;
+      padding:6px 4px; border-radius:8px; border:1px solid var(--border2);
+      background:rgba(255,255,255,0.06); color:var(--text);
+    }
+    .batchItemRow .itemName{ display:flex; flex-direction:column; gap:1px; }
+    .batchIngAmt{ font-size:10px; color:var(--muted); font-weight:700; }
+    .batchCell .batchVal{
+      font-weight:900; font-size:15px; text-align:center; padding:4px 0;
+    }
+    .batchCell .batchVal.batchUnit{ font-size:10px; color:var(--muted); font-weight:700; }
+    .batchItemRow.batchMissing{ opacity:0.7; }
+    .batchItemRow.batchMissing .batchVal{ color: var(--tabRed); }
+    .batchWarn{ color: var(--tabRed); font-size:10px; font-weight:800; }
+    .batchIngSize{ color: var(--muted); font-size:11px; font-weight:600; }
+    /* Manager modal */
+    .batchManagerModal{ max-width: 640px; }
+    .batchList{ display:flex; flex-direction:column; gap:8px; margin-bottom:12px; }
+    .batchListRow{
+      display:flex; align-items:center; justify-content:space-between; gap:10px;
+      padding:10px 12px; border-radius:10px; border:1px solid var(--border);
+      background: rgba(255,255,255,0.04);
+    }
+    .batchListName{ font-weight:900; }
+    .batchListMeta{ font-size:11px; color:var(--muted); }
+    .batchListActions{ display:flex; gap:6px; flex:0 0 auto; }
+    .batchIngList{ display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
+    .batchIngRow{
+      display:flex; align-items:center; gap:8px;
+      padding:6px 8px; border-radius:8px; border:1px solid var(--border);
+      background: rgba(255,255,255,0.04);
+    }
+    .batchIngName{ flex:1 1 auto; font-weight:700; font-size:13px; }
+    .batchIngAmtWrap{ display:flex; align-items:center; gap:4px; flex:0 0 auto; }
+    .batchIngAmtInput{ width:70px; text-align:right; }
+    .batchIngUnit{ font-size:11px; color:var(--muted); }
+    .batchIngRemove{ flex:0 0 auto; padding:4px 8px; }
+    .batchIngSearchWrap{ margin-top:6px; }
+    .batchIngResults{ display:flex; flex-direction:column; gap:2px; max-height:220px; overflow:auto; -webkit-overflow-scrolling:touch; margin-top:6px; }
+    .batchResult{
+      display:flex; align-items:center; justify-content:space-between; gap:8px;
+      padding:8px 10px; border-radius:8px; cursor:pointer;
+      border:1px solid var(--border); background: rgba(255,255,255,0.04);
+    }
+    .batchResult:hover{ border-color: var(--addYellowA); }
+    .batchResultSize{ font-size:11px; color:var(--muted); }
+    .batchSizePrompt:empty{ display:none; }
+    .batchSizeForm{ margin-top:8px; padding:8px; border-radius:8px; border:1px solid var(--warnbd); background:var(--warnbg); }
+    .batchSizeFormRow{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:6px; }
+    .batchSizeFormRow input{ width:90px; }
     /* EDIT LAYOUT pinned to the top-right, just above the right ribbon, for quick access. */
     #toggleLayoutEditBtn.layoutEditFab{
       position: fixed;

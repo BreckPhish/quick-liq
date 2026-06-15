@@ -35,7 +35,8 @@ const CONFIG = {
     VENDOR: 15,     // O
     COST: 16,       // P
     CS_SIZE: 17,    // Q
-    NOTES: 18       // R
+    NOTES: 18,      // R
+    BATCH_BOTTLES: 19 // S — app-managed: batched-cocktail liquor on hand, in bottles (tenths)
   },
 
   SECTION_HEADINGS: [
@@ -696,6 +697,143 @@ function saveUiSettings(payload) {
   }
   sheet.getRange(idx + 1, 2).setValue(json);
   return { ok: true };
+}
+
+/**
+ * Parse a free-text bottle/volume string into milliliters.
+ * Handles "750ml", "1L", "1.75 L", "750", "25.4oz", "25.4 fl oz", "1.5 liter".
+ * A bare number is assumed to already be milliliters.
+ * Returns a positive Number of ml, or null when it cannot be parsed.
+ */
+function parseVolumeMl_(text) {
+  const raw = String(text == null ? '' : text).trim().toLowerCase();
+  if (!raw) return null;
+  const m = raw.match(/([0-9]+(?:\.[0-9]+)?)\s*([a-z\s.]*)/);
+  if (!m) return null;
+  const value = parseFloat(m[1]);
+  if (!isFinite(value) || value <= 0) return null;
+  const unit = String(m[2] || '').replace(/[\s.]/g, '');
+  if (!unit || unit === 'ml' || unit === 'milliliter' || unit === 'milliliters' || unit === 'millilitre' || unit === 'millilitres' || unit === 'cc') {
+    return value;
+  }
+  if (unit === 'l' || unit === 'lt' || unit === 'ltr' || unit === 'liter' || unit === 'liters' || unit === 'litre' || unit === 'litres') {
+    return value * 1000;
+  }
+  if (unit === 'oz' || unit === 'ozs' || unit === 'floz' || unit === 'flozs' || unit === 'flounce' || unit === 'flounces' || unit === 'ounce' || unit === 'ounces') {
+    return value * ML_PER_FL_OZ;
+  }
+  // Unknown unit token — treat the leading number as ml only when there was no unit suffix.
+  return null;
+}
+
+var ML_PER_FL_OZ = 29.5735295625;
+
+/**
+ * Per-item batched-cocktail liquor on hand, in (fractional) bottles, keyed by item id.
+ * Pulls recipes from uiSettings.batchRecipes and item bottle sizes from INVENT col D.
+ * All recipe volumes (yieldMl, bottleMl, ingredient amountMl) are stored canonical in ml.
+ */
+function computeBatchBottlesByItem_(uiSettings, inventSizeMlById) {
+  const out = {};
+  const recipes = (uiSettings && Array.isArray(uiSettings.batchRecipes)) ? uiSettings.batchRecipes : [];
+  recipes.forEach(recipe => {
+    if (!recipe || typeof recipe !== 'object') return;
+    const yieldMl = Number(recipe.yieldMl);
+    const bottleMl = Number(recipe.bottleMl);
+    const bottleCount = Number(recipe.bottleCount);
+    if (!(yieldMl > 0) || !(bottleMl > 0) || !(bottleCount > 0)) return;
+    const ingredients = Array.isArray(recipe.ingredients) ? recipe.ingredients : [];
+    ingredients.forEach(ing => {
+      if (!ing || typeof ing !== 'object') return;
+      const itemId = String(ing.itemId || '').trim();
+      const amountMl = Number(ing.amountMl);
+      if (!itemId || !(amountMl > 0)) return;
+      const unitMl = Number(inventSizeMlById ? inventSizeMlById[itemId] : 0);
+      if (!(unitMl > 0)) return; // undefined/unparseable bottle size contributes nothing
+      // ml of this ingredient across all batched bottles, expressed in bottles of the item.
+      const bottles = (amountMl / yieldMl) * bottleMl * bottleCount / unitMl;
+      if (isFinite(bottles) && bottles > 0) out[itemId] = (out[itemId] || 0) + bottles;
+    });
+  });
+  return out;
+}
+
+/**
+ * Recompute the app-managed batch helper column (INVENT col S) for every item:
+ * the batched-cocktail liquor on hand, in bottles rounded to tenths. Blank when zero.
+ */
+function syncBatchHelperColumn_(uiSettingsOverride) {
+  const ss = getSpreadsheet_();
+  const sheet = ss.getSheetByName(CONFIG.INVENT_SHEET);
+  if (!sheet) return { ok: false, message: `Missing sheet: ${CONFIG.INVENT_SHEET}` };
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 1) return { ok: true, updated: 0 };
+
+  const uiSettings = uiSettingsOverride || getUiSettings_();
+  const idCol = CONFIG.COL.ID;
+  const sizeCol = CONFIG.COL.BOTTLE_SIZE;
+  const maxCol = Math.max(idCol, sizeCol);
+  const data = sheet.getRange(1, 1, lastRow, maxCol).getDisplayValues();
+
+  const sizeMlById = {};
+  for (let r = 0; r < lastRow; r++) {
+    const id = String(data[r][idCol - 1] || '').trim();
+    if (!id) continue;
+    const ml = parseVolumeMl_(data[r][sizeCol - 1]);
+    if (ml) sizeMlById[id] = ml;
+  }
+
+  const bottlesById = computeBatchBottlesByItem_(uiSettings, sizeMlById);
+
+  const colVals = [];
+  let updated = 0;
+  for (let r = 0; r < lastRow; r++) {
+    const id = String(data[r][idCol - 1] || '').trim();
+    let v = '';
+    if (id && bottlesById[id] > 0) {
+      v = Math.round(bottlesById[id] * 10) / 10;
+      updated++;
+    }
+    colVals.push([v]);
+  }
+  sheet.getRange(1, CONFIG.COL.BATCH_BOTTLES, lastRow, 1).setValues(colVals);
+  return { ok: true, updated };
+}
+
+/**
+ * Persist batch cocktail recipes (stored in uiSettings.batchRecipes) and refresh the
+ * helper column the order guides read. Volumes are expected canonical in ml.
+ */
+function saveBatchRecipes(payload) {
+  assertAuthorized_();
+  const recipes = (payload && Array.isArray(payload.recipes)) ? payload.recipes
+    : (Array.isArray(payload) ? payload : []);
+  const clean = recipes.map(sanitizeBatchRecipe_).filter(Boolean);
+  const uiSettings = getUiSettings_();
+  uiSettings.batchRecipes = clean;
+  saveUiSettings(uiSettings);
+  let sync = null;
+  try { sync = syncBatchHelperColumn_(uiSettings); } catch (e) { sync = { ok: false, message: String(e) }; }
+  return { ok: true, batchRecipes: clean, sync };
+}
+
+function sanitizeBatchRecipe_(recipe) {
+  if (!recipe || typeof recipe !== 'object') return null;
+  const id = String(recipe.id || '').trim() || ('br_' + Date.now() + '_' + Math.floor(Math.random() * 1e6));
+  const name = String(recipe.name || '').trim();
+  if (!name) return null;
+  const unit = (String(recipe.unit || 'ml').trim().toLowerCase() === 'oz') ? 'oz' : 'ml';
+  const yieldMl = Number(recipe.yieldMl) > 0 ? Number(recipe.yieldMl) : 0;
+  const bottleMl = Number(recipe.bottleMl) > 0 ? Number(recipe.bottleMl) : 0;
+  const bottleCount = Number(recipe.bottleCount) >= 0 ? Number(recipe.bottleCount) : 0;
+  const ingredients = (Array.isArray(recipe.ingredients) ? recipe.ingredients : []).map(ing => {
+    if (!ing || typeof ing !== 'object') return null;
+    const itemId = String(ing.itemId || '').trim();
+    const amountMl = Number(ing.amountMl) > 0 ? Number(ing.amountMl) : 0;
+    if (!itemId || !amountMl) return null;
+    return { itemId, amountMl };
+  }).filter(Boolean);
+  return { id, name, unit, yieldMl, bottleMl, bottleCount, ingredients };
 }
 
 function getSectionGroupsSheet_() {
