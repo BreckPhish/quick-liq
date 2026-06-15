@@ -9,12 +9,15 @@ let lastFilteredRows = [];
 let baseSectionsMeta = [];
 let sectionsMeta = [];
 let sectionGroups = [];
+let batchRecipes = [];
+let batchContributions = {};
 let groupMetaCache = null;
 let sectionLabelOverrides = {};
 let vendors = [];
 let categories = [];
 let secondarySections = [];
 let sectionShortcuts = {};
+let archivedItems = new Set();
 let distributors = [];
 let orderGuideSheets = [];
 let orderGuideSheetNames = [];
@@ -35,8 +38,6 @@ let editModalState = null;
 let editModalSourceRow = null;
 let editModalSaveInFlight = false;
 let editModalSectionType = 'home';
-let deleteScopeItemId = '';
-let deleteScopeSectionKey = '';
 let sectionEditOpen = false;
 let sectionEditRow = null;
 let sectionEditOldLabel = "";
@@ -63,13 +64,22 @@ let emailModalOpen = false;
 let settingsModalOpen = false;
 let settingsPinModalOpen = false;
 let settingsPinUnlocked = false;
+let settingsPinCheckInFlight = false;
+let launchPinUnlocked = false;
+let launchPinCheckInFlight = false;
+let appInitializationStarted = false;
 let orderGuidesModalOpen = false;
 let inventoryColumnsModalOpen = false;
 let customizeModalOpen = false;
 let deleteSectionsModalOpen = false;
 let distributorsModalOpen = false;
+let batchRecipesModalOpen = false;
+let batchRecipeEditorOpen = false;
+let batchRecipeEditingId = '';
+let batchBottleSaveTimers = new Map();
 let rowFocusWired = false;
 let rowClickFocusWired = false;
+let selectedItemField = null;
 let uiSettings = {};
 let inventoryColumnSettings = {};
 let currentPage = 'inventory';
@@ -88,6 +98,8 @@ let savePillState = "idle";
 let searchActive = false;
 let searchCollapsedSnapshot = null;
 let groupCollapsedSnapshot = null;
+let searchScrollSnapshot = 0;
+let searchFocusTarget_ = null;
 const PENDING_EDITS_KEY = "invent_pending_edits_v1";
 const PENDING_META_KEY = "invent_pending_meta_v1";
 let pendingEdits = new Map();
@@ -110,9 +122,13 @@ let layoutDropLineEl = null;
 let layoutMutationQueue = [];
 let layoutMutationInFlight = false;
 let pendingRightNavResync = false;
+let behindBarDragWired = false;
+let behindBarDragState = null;
+let behindBarDragSuppressClickUntil = 0;
 const LAYOUT_DRAG_THRESHOLD = 12;
 const LAYOUT_SCROLL_MARGIN = 70;
 const LAYOUT_SCROLL_SPEED = 14;
+const BEHIND_BAR_DRAG_STEP_PX = 20;
   let rightButtonsInOrder = []; // right-nav entries, for alignment reference
 let addBtnEl = null;
 let addModalOpen = false;
@@ -155,6 +171,7 @@ let manageDistKey = '';
   let navTopSyncWired = false;
   let navBaseTopPx = null;
   let navTopSyncRaf = 0;
+  let navResizeObserver = null;
   const undoStack = [];
   const redoStack = [];
   const MAX_HISTORY = 250;
@@ -259,6 +276,14 @@ let manageDistKey = '';
   function isNeutralHomeLabel_(label){
     return norm_(label) === norm_(NEUTRAL_HOME_LABEL);
   }
+  // A user-created secondary/location section (has a stored item order) — its
+  // rows can be drag-reordered, unlike the auto-sorted dynamic groups.
+  function isReorderableSecondarySection_(sectionKey){
+    const key = String(sectionKey || '').trim();
+    if (!key || isDynamicHomeSectionKey_(key)) return false;
+    return (Array.isArray(secondarySections) ? secondarySections : [])
+      .some(s => String(s && s.key || '') === key);
+  }
   // ALL ITEMS and its dynamic children can't be deleted as groups.
   function isProtectedGroupKey_(key){
     const n = norm_(key || '');
@@ -304,9 +329,6 @@ let manageDistKey = '';
     if (el) el.style.display = 'none';
     const frame = document.getElementById('orderGuidesFrame');
     if (frame) frame.src = '';
-  }
-  function orderGuidesOverlayClick(e){
-    closeOrderGuides();
   }
   function renderOrderGuideSheetList_(){
     const list = document.getElementById('orderGuideSheetList');
@@ -356,12 +378,29 @@ let manageDistKey = '';
         const groupEnabled = groupState[field] !== false;
         inp.disabled = layoutEditMode || !(baseAllow && enabled && groupEnabled);
       });
+      refreshBehindBarDragEligibilityForRow_(row);
       const groupHide = getGroupHideDisabledBySectionKey_(sectionKey);
       const resolved = (groupHide !== null) ? groupHide : hide;
       refreshHiddenFieldCellsForRow_(row, resolved);
     });
     refreshHiddenSectionSubheadings_();
     if (editModalOpen) updateEditModalColumnState_();
+  }
+  function refreshBehindBarDragEligibilityForRow_(row){
+    if (!row) return;
+    const sectionLabel = row.getAttribute('data-section-label') || '';
+    const sectionKey = row.getAttribute('data-section-key') || '';
+    const input = row.querySelector('input[data-field="g"]');
+    const cfg = fieldCfgForSection_(sectionLabel);
+    const groupState = getGroupColumnStateBySectionKey_(sectionKey);
+    const eligible = !!input &&
+      row.getAttribute('data-archived') !== '1' &&
+      input.dataset.baseAllow === '1' &&
+      !cfg.forceDisable[1] &&
+      groupState.g !== false &&
+      isSectionColumnEnabled_(sectionLabel, 'g') &&
+      isSectionInBehindBarGroup_(sectionKey);
+    row.classList.toggle('behindBarDragRow', eligible);
   }
   function refreshHiddenFieldCells_(){
     const hide = !!uiSettings?.hideDisabledInputs;
@@ -453,9 +492,6 @@ let manageDistKey = '';
     inventoryColumnsModalOpen = false;
     const el = document.getElementById('inventoryColumnsOverlay');
     if (el) el.style.display = 'none';
-  }
-  function inventoryColumnsOverlayClick(e){
-    closeInventoryColumnsModal();
   }
   function renderInventoryColumnsModal_(){
     const list = document.getElementById('inventoryColumnsList');
@@ -663,9 +699,6 @@ let manageDistKey = '';
     const el = document.getElementById('printOverlay');
     if (el) el.style.display = 'none';
   }
-  function printOverlayClick(e){
-    closePrintModal();
-  }
   function openEmailModal(){
     emailModalOpen = true;
     const el = document.getElementById('emailOverlay');
@@ -675,9 +708,6 @@ let manageDistKey = '';
     emailModalOpen = false;
     const el = document.getElementById('emailOverlay');
     if (el) el.style.display = 'none';
-  }
-  function emailOverlayClick(e){
-    closeEmailModal();
   }
   function openDeleteSectionsModal(){
     if (blockLayoutInput_('delete sections')) return;
@@ -690,9 +720,6 @@ let manageDistKey = '';
     deleteSectionsModalOpen = false;
     const el = document.getElementById('deleteSectionsOverlay');
     if (el) el.style.display = 'none';
-  }
-  function deleteSectionsOverlayClick(e){
-    closeDeleteSectionsModal();
   }
   function renderDeleteSectionsModal_(){
     const list = document.getElementById('deleteSectionsList');
@@ -792,16 +819,278 @@ let manageDistKey = '';
     const el = document.getElementById('settingsOverlay');
     if (el) el.style.display = 'none';
   }
-  function settingsOverlayClick(e){
+  function openBatchRecipesModal(){
+    if (blockLayoutInput_('manage batch recipes')) return;
     closeSettingsModal();
+    batchRecipesModalOpen = true;
+    const overlay = document.getElementById('batchRecipesOverlay');
+    if (overlay) overlay.style.display = 'flex';
+    showBatchRecipeManager_();
+  }
+  function closeBatchRecipesModal(){
+    batchRecipesModalOpen = false;
+    batchRecipeEditorOpen = false;
+    batchRecipeEditingId = '';
+    const overlay = document.getElementById('batchRecipesOverlay');
+    if (overlay) overlay.style.display = 'none';
+  }
+  function openBatchRecipesFromAddMenu_(){
+    closeAddMenu();
+    openBatchRecipesModal();
+    openBatchRecipeEditor_('');
+  }
+  function batchRecipeGroupName_(key){
+    const target = norm_(key || '');
+    const group = (sectionGroups || []).find(entry => norm_(getGroupKeyClient_(entry)) === target);
+    return group ? String(group.name || group.key || key) : String(key || '');
+  }
+  function showBatchRecipeManager_(){
+    batchRecipeEditorOpen = false;
+    batchRecipeEditingId = '';
+    const manager = document.getElementById('batchRecipeManagerView');
+    const editor = document.getElementById('batchRecipeEditorView');
+    if (manager) manager.style.display = '';
+    if (editor) editor.style.display = 'none';
+    renderBatchRecipeList_();
+  }
+  function renderBatchRecipeList_(){
+    const list = document.getElementById('batchRecipeList');
+    if (!list) return;
+    const recipes = (batchRecipes || []).slice().sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')));
+    list.innerHTML = recipes.length ? recipes.map(recipe => {
+      const id = String(recipe?.id || '');
+      const ingredientCount = Array.isArray(recipe?.ingredients) ? recipe.ingredients.length : 0;
+      return `<button type="button" class="batchRecipeCard" onclick="openBatchRecipeEditor_('${escapeHtml(id)}')">
+        <span class="batchRecipeCardName">${escapeHtml(recipe?.name || '')}</span>
+        <span>${escapeHtml(batchRecipeGroupName_(recipe?.groupKey))}</span>
+        <span>${escapeHtml(formatBatchBottles_(recipe?.bottleCount || 0))} bottles · ${ingredientCount} ingredient${ingredientCount === 1 ? '' : 's'}</span>
+      </button>`;
+    }).join('') : '<div class="status">No cocktail batch recipes yet.</div>';
+  }
+  function getBatchInventoryItems_(){
+    const seen = new Set();
+    const items = [];
+    (baseRows || []).forEach(row => {
+      if (row?.type !== 'item') return;
+      const id = String(row.id || '').trim();
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      items.push(row);
+    });
+    return items.sort((a, b) => String(a.b || '').localeCompare(String(b.b || '')));
+  }
+  function buildBatchIngredientOptions_(currentId){
+    const current = String(currentId || '');
+    const options = ['<option value="">Select inventory item</option>'];
+    getBatchInventoryItems_().forEach(item => {
+      const id = String(item.id || '');
+      const isArchived = archivedItems.has(id);
+      const validSize = Number.isFinite(parseBottleSizeMlClient_(item.bottleSize));
+      const eligible = validSize && !isArchived;
+      const suffix = isArchived ? ' (ARCHIVED)' : validSize ? ` (${item.bottleSize})` : ' (SET BOTTLE SIZE FIRST)';
+      options.push(`<option value="${escapeHtml(id)}"${id === current ? ' selected' : ''}${eligible ? '' : ' disabled'}>${escapeHtml(String(item.b || '') + suffix)}</option>`);
+    });
+    return options.join('');
+  }
+  function openBatchRecipeEditor_(id){
+    if (blockLayoutInput_('manage batch recipes')) return;
+    if (!batchRecipesModalOpen) {
+      closeSettingsModal();
+      batchRecipesModalOpen = true;
+      const overlay = document.getElementById('batchRecipesOverlay');
+      if (overlay) overlay.style.display = 'flex';
+    }
+    const recipe = findBatchRecipe_(id);
+    batchRecipeEditorOpen = true;
+    batchRecipeEditingId = recipe ? String(recipe.id || '') : '';
+    const manager = document.getElementById('batchRecipeManagerView');
+    const editor = document.getElementById('batchRecipeEditorView');
+    if (manager) manager.style.display = 'none';
+    if (editor) editor.style.display = '';
+    const groupOptions = (sectionGroups || []).map(group => {
+      const key = getGroupKeyClient_(group);
+      const selected = recipe && norm_(recipe.groupKey || '') === norm_(key);
+      return `<option value="${escapeHtml(key)}"${selected ? ' selected' : ''}>${escapeHtml(group.name || key)}</option>`;
+    }).join('');
+    const setValue = (elementId, value) => { const el = document.getElementById(elementId); if (el) el.value = value ?? ''; };
+    setValue('batchRecipeName', recipe?.name || '');
+    const groupEl = document.getElementById('batchRecipeGroup');
+    if (groupEl) groupEl.innerHTML = groupOptions || '<option value="">Create a group first</option>';
+    setValue('batchRecipeYieldAmount', recipe?.yieldAmount || '');
+    setValue('batchRecipeYieldUnit', normalizeVolumeUnitClient_(recipe?.yieldUnit) === 'FL OZ' ? 'FL OZ' : 'ML');
+    setValue('batchRecipeBottleSizeAmount', recipe?.bottleSizeAmount || '');
+    setValue('batchRecipeBottleSizeUnit', normalizeVolumeUnitClient_(recipe?.bottleSizeUnit) === 'FL OZ' ? 'FL OZ' : 'ML');
+    setValue('batchRecipeBottleCount', Number(recipe?.bottleCount) || 0);
+    const list = document.getElementById('batchIngredientList');
+    if (list) list.innerHTML = '';
+    (Array.isArray(recipe?.ingredients) ? recipe.ingredients : []).forEach(ingredient => addBatchIngredientRow_(ingredient));
+    if (!recipe?.ingredients?.length) addBatchIngredientRow_();
+    const deleteBtn = document.getElementById('deleteBatchRecipeBtn');
+    if (deleteBtn) deleteBtn.style.display = recipe ? '' : 'none';
+  }
+  function addBatchIngredientRow_(ingredient){
+    const list = document.getElementById('batchIngredientList');
+    if (!list) return;
+    const row = document.createElement('div');
+    row.className = 'batchIngredientEditorRow';
+    const kind = String(ingredient?.kind || '').toLowerCase() === 'custom' || (!ingredient?.itemId && ingredient?.name)
+      ? 'custom'
+      : 'inventory';
+    const vendorOptions = `<option value="">No distributor</option>${buildOptions_(vendors, ingredient?.vendor || '')}`;
+    const categoryOptions = `<option value="">No category</option>${buildOptions_(categories, ingredient?.categoryN || '')}`;
+    row.innerHTML = `
+      <div class="batchIngredientCore">
+        <select data-batch-ingredient-kind aria-label="Ingredient source">
+          <option value="inventory"${kind === 'inventory' ? ' selected' : ''}>Inventory item</option>
+          <option value="custom"${kind === 'custom' ? ' selected' : ''}>Recipe-only item</option>
+        </select>
+        <select data-batch-ingredient-id aria-label="Inventory ingredient">${buildBatchIngredientOptions_(ingredient?.itemId || '')}</select>
+        <input type="text" placeholder="Ingredient name" value="${escapeHtml(ingredient?.name || '')}" data-batch-ingredient-name aria-label="Recipe-only ingredient name" />
+        <input type="number" min="0" step="0.01" inputmode="decimal" placeholder="Amount" value="${escapeHtml(ingredient?.amount || '')}" data-batch-ingredient-amount aria-label="Ingredient amount" />
+        <select data-batch-ingredient-unit aria-label="Ingredient volume unit"><option value="ML"${normalizeVolumeUnitClient_(ingredient?.unit) === 'FL OZ' ? '' : ' selected'}>mL</option><option value="FL OZ"${normalizeVolumeUnitClient_(ingredient?.unit) === 'FL OZ' ? ' selected' : ''}>fl oz</option></select>
+        <button type="button" class="danger" onclick="this.closest('.batchIngredientEditorRow').remove()">Remove</button>
+      </div>
+      <details class="batchIngredientOptional" data-batch-custom-only${kind === 'custom' ? '' : ' hidden'}>
+        <summary>Optional item details</summary>
+        <div class="batchIngredientOptionalGrid">
+          <label><span>Distributor</span><select data-batch-ingredient-vendor>${vendorOptions}</select></label>
+          <label><span>Category</span><select data-batch-ingredient-category>${categoryOptions}</select></label>
+          <label><span>Item Order Name</span><input type="text" value="${escapeHtml(ingredient?.orderName || '')}" data-batch-ingredient-order-name /></label>
+          <label><span>Package Size</span><input type="text" value="${escapeHtml(ingredient?.packageSize || '')}" placeholder="Example: 1 GAL" data-batch-ingredient-package-size /></label>
+          <label><span>PAR</span><input type="text" inputmode="decimal" value="${escapeHtml(ingredient?.par || '')}" data-batch-ingredient-par /></label>
+          <label><span>Cost</span><input type="text" inputmode="decimal" value="${escapeHtml(ingredient?.cost || '')}" data-batch-ingredient-cost /></label>
+          <label><span>Case Size</span><input type="text" inputmode="decimal" value="${escapeHtml(ingredient?.csSize || '')}" data-batch-ingredient-case-size /></label>
+          <label class="batchIngredientNotes"><span>Notes</span><input type="text" value="${escapeHtml(ingredient?.notes || '')}" data-batch-ingredient-notes /></label>
+        </div>
+      </details>
+    `;
+    const kindSelect = row.querySelector('[data-batch-ingredient-kind]');
+    if (kindSelect) kindSelect.addEventListener('change', () => updateBatchIngredientRowMode_(row));
+    updateBatchIngredientRowMode_(row);
+    list.appendChild(row);
+  }
+  function updateBatchIngredientRowMode_(row){
+    if (!row) return;
+    const custom = String(row.querySelector('[data-batch-ingredient-kind]')?.value || '') === 'custom';
+    const inventorySelect = row.querySelector('[data-batch-ingredient-id]');
+    const nameInput = row.querySelector('[data-batch-ingredient-name]');
+    const optional = row.querySelector('[data-batch-custom-only]');
+    if (inventorySelect) inventorySelect.hidden = custom;
+    if (nameInput) nameInput.hidden = !custom;
+    if (optional) optional.hidden = !custom;
+  }
+  function collectBatchRecipePayload_(){
+    const ingredients = Array.from(document.querySelectorAll('#batchIngredientList .batchIngredientEditorRow')).map(row => {
+      const kind = String(row.querySelector('[data-batch-ingredient-kind]')?.value || 'inventory');
+      const base = {
+        kind,
+        itemId: kind === 'inventory' ? String(row.querySelector('[data-batch-ingredient-id]')?.value || '').trim() : '',
+        name: kind === 'custom' ? String(row.querySelector('[data-batch-ingredient-name]')?.value || '').trim() : '',
+        amount: Number(row.querySelector('[data-batch-ingredient-amount]')?.value),
+        unit: String(row.querySelector('[data-batch-ingredient-unit]')?.value || 'ML')
+      };
+      if (kind === 'custom') {
+        base.vendor = String(row.querySelector('[data-batch-ingredient-vendor]')?.value || '').trim();
+        base.categoryN = String(row.querySelector('[data-batch-ingredient-category]')?.value || '').trim();
+        base.orderName = String(row.querySelector('[data-batch-ingredient-order-name]')?.value || '').trim();
+        base.packageSize = String(row.querySelector('[data-batch-ingredient-package-size]')?.value || '').trim();
+        base.par = String(row.querySelector('[data-batch-ingredient-par]')?.value || '').trim();
+        base.cost = String(row.querySelector('[data-batch-ingredient-cost]')?.value || '').trim();
+        base.csSize = String(row.querySelector('[data-batch-ingredient-case-size]')?.value || '').trim();
+        base.notes = String(row.querySelector('[data-batch-ingredient-notes]')?.value || '').trim();
+      }
+      return base;
+    }).filter(ingredient => ingredient.itemId || ingredient.name || ingredient.amount);
+    return {
+      id: batchRecipeEditingId,
+      name: String(document.getElementById('batchRecipeName')?.value || '').trim(),
+      groupKey: String(document.getElementById('batchRecipeGroup')?.value || '').trim(),
+      yieldAmount: Number(document.getElementById('batchRecipeYieldAmount')?.value),
+      yieldUnit: String(document.getElementById('batchRecipeYieldUnit')?.value || 'ML'),
+      bottleSizeAmount: Number(document.getElementById('batchRecipeBottleSizeAmount')?.value),
+      bottleSizeUnit: String(document.getElementById('batchRecipeBottleSizeUnit')?.value || 'ML'),
+      bottleCount: Number(document.getElementById('batchRecipeBottleCount')?.value || 0),
+      ingredients
+    };
+  }
+  function applyBatchRecipeServerState_(res){
+    batchRecipes = Array.isArray(res?.recipes) ? res.recipes : batchRecipes;
+    batchContributions = (res?.batchContributions && typeof res.batchContributions === 'object') ? res.batchContributions : {};
+    rebuildAllRows_();
+    syncGroupCollapsedDefaults_();
+    applyFilter();
+    buildRightNav_();
+  }
+  function saveBatchRecipe_(){
+    const payload = collectBatchRecipePayload_();
+    if (!payload.name || !payload.groupKey || payload.yieldAmount <= 0 || payload.bottleSizeAmount <= 0 || !payload.ingredients.length) {
+      setBanner('error', 'Recipe name, parent group, full yield, bottle size, and at least one ingredient are required.');
+      return;
+    }
+    for (const ingredient of payload.ingredients) {
+      const label = ingredient.kind === 'custom' ? ingredient.name : ingredient.itemId;
+      if (!label) {
+        setBanner('error', ingredient.kind === 'custom'
+          ? 'Enter a name for each recipe-only ingredient.'
+          : 'Select an inventory item for each inventory ingredient.');
+        return;
+      }
+      if (!Number.isFinite(ingredient.amount) || ingredient.amount <= 0) {
+        setBanner('error', `Enter a recipe volume greater than zero for ${label}.`);
+        return;
+      }
+    }
+    setSavePill('saving', 'Saving…');
+    google.script.run
+      .withSuccessHandler(res => {
+        if (!res?.ok) {
+          setSavePill('err', 'Error');
+          setBanner('error', res?.message || 'Could not save batch recipe.');
+          return;
+        }
+        applyBatchRecipeServerState_(res);
+        showBatchRecipeManager_();
+        setSavePill('ok', 'Saved');
+      })
+      .withFailureHandler(err => {
+        setSavePill('err', 'Error');
+        setBanner('error', 'Batch recipe save error: ' + (err && err.message ? err.message : err));
+      })
+      .saveBatchRecipe(payload);
+  }
+  function deleteBatchRecipe_(){
+    const recipe = findBatchRecipe_(batchRecipeEditingId);
+    if (!recipe) return;
+    if (!window.confirm(`Delete batch recipe "${recipe.name}"?`)) return;
+    setSavePill('saving', 'Deleting…');
+    google.script.run
+      .withSuccessHandler(res => {
+        if (!res?.ok) {
+          setSavePill('err', 'Error');
+          setBanner('error', res?.message || 'Could not delete batch recipe.');
+          return;
+        }
+        applyBatchRecipeServerState_(res);
+        showBatchRecipeManager_();
+        setSavePill('ok', 'Deleted');
+      })
+      .withFailureHandler(err => {
+        setSavePill('err', 'Error');
+        setBanner('error', 'Batch recipe delete error: ' + (err && err.message ? err.message : err));
+      })
+      .deleteBatchRecipe({ id: batchRecipeEditingId });
   }
   function openSettingsPinModal(){
     settingsPinModalOpen = true;
+    settingsPinCheckInFlight = false;
     const el = document.getElementById('settingsPinOverlay');
     if (el) el.style.display = 'flex';
     setTimeout(() => {
       const input = document.getElementById('settingsPinInput');
+      const submit = document.getElementById('settingsPinSubmitBtn');
+      if (submit) submit.disabled = false;
       if (input) {
+        input.disabled = false;
         input.value = '';
         input.onkeydown = (e) => {
           if (e.key === 'Enter') {
@@ -819,21 +1108,105 @@ let manageDistKey = '';
     const el = document.getElementById('settingsPinOverlay');
     if (el) el.style.display = 'none';
   }
-  function settingsPinOverlayClick(e){
-    closeSettingsPinModal();
-  }
   function confirmSettingsPin_(){
-    const pin = String(document.getElementById('settingsPinInput')?.value || '').trim();
-    if (pin === '1968' || pin === '1415') {
-      settingsPinUnlocked = true;
-      closeSettingsPinModal();
-      openSettingsModal();
-      return;
-    }
-    window.alert('Incorrect PIN.');
+    if (settingsPinCheckInFlight) return;
+    const input = document.getElementById('settingsPinInput');
+    const submit = document.getElementById('settingsPinSubmitBtn');
+    const pin = String(input?.value || '').trim();
+    if (!pin) return;
+    settingsPinCheckInFlight = true;
+    if (input) input.disabled = true;
+    if (submit) submit.disabled = true;
+    google.script.run
+      .withSuccessHandler(ok => {
+        settingsPinCheckInFlight = false;
+        if (!ok) {
+          if (input) {
+            input.disabled = false;
+            input.value = '';
+            input.focus({ preventScroll: true });
+          }
+          if (submit) submit.disabled = false;
+          window.alert('Incorrect PIN.');
+          return;
+        }
+        settingsPinUnlocked = true;
+        closeSettingsPinModal();
+        openSettingsModal();
+      })
+      .withFailureHandler(() => {
+        settingsPinCheckInFlight = false;
+        if (input) {
+          input.disabled = false;
+          input.focus({ preventScroll: true });
+        }
+        if (submit) submit.disabled = false;
+        window.alert('PIN verification failed. Try again.');
+      })
+      .verifySettingsPin(pin);
   }
   function resetSettingsPin_(){
     settingsPinUnlocked = false;
+  }
+  function showLaunchPin_(){
+    launchPinUnlocked = false;
+    launchPinCheckInFlight = false;
+    document.body.classList.add('launchLocked');
+    const overlay = document.getElementById('launchPinOverlay');
+    const input = document.getElementById('launchPinInput');
+    const error = document.getElementById('launchPinError');
+    const submit = document.getElementById('launchPinSubmitBtn');
+    if (overlay) overlay.style.display = 'flex';
+    if (input) input.value = '';
+    if (error) error.textContent = '';
+    if (submit) submit.disabled = false;
+    setTimeout(() => input?.focus({ preventScroll: true }), 10);
+  }
+  function confirmLaunchPin_(){
+    if (launchPinCheckInFlight) return;
+    const input = document.getElementById('launchPinInput');
+    const error = document.getElementById('launchPinError');
+    const submit = document.getElementById('launchPinSubmitBtn');
+    const pin = String(input?.value || '').trim();
+    if (!pin) {
+      if (error) error.textContent = 'Enter the PIN.';
+      input?.focus({ preventScroll: true });
+      return;
+    }
+    launchPinCheckInFlight = true;
+    if (error) error.textContent = 'Checking PIN...';
+    if (input) input.disabled = true;
+    if (submit) submit.disabled = true;
+    google.script.run
+      .withSuccessHandler(ok => {
+        launchPinCheckInFlight = false;
+        if (!ok) {
+          if (error) error.textContent = 'Incorrect PIN.';
+          if (input) {
+            input.disabled = false;
+            input.value = '';
+            input.focus({ preventScroll: true });
+          }
+          if (submit) submit.disabled = false;
+          return;
+        }
+        launchPinUnlocked = true;
+        if (error) error.textContent = '';
+        const overlay = document.getElementById('launchPinOverlay');
+        if (overlay) overlay.style.display = 'none';
+        document.body.classList.remove('launchLocked');
+        initializeAppAfterLaunch_();
+      })
+      .withFailureHandler(() => {
+        launchPinCheckInFlight = false;
+        if (error) error.textContent = 'PIN verification failed. Try again.';
+        if (input) {
+          input.disabled = false;
+          input.focus({ preventScroll: true });
+        }
+        if (submit) submit.disabled = false;
+      })
+      .verifyLaunchPin(pin);
   }
   function settingsEraseData(){
     closeSettingsModal();
@@ -847,22 +1220,29 @@ let manageDistKey = '';
     layoutEditMode = !layoutEditMode;
     if (layoutEditMode) closeLayoutEditOverlays_();
     applyLayoutEditMode_();
+    // If a search is active, re-evaluate it for the new mode (focus vs palette).
+    if ((document.getElementById('q')?.value || '').trim()) applyFilter();
   }
   function applyLayoutEditMode_(){
+    if (layoutEditMode) cancelBehindBarDrag_(true);
     document.body.classList.toggle('layoutEditOn', layoutEditMode);
-    const btn = document.getElementById('toggleLayoutEditBtn');
-    if (btn) {
-      btn.classList.toggle('success', !!layoutEditMode);
-      btn.classList.toggle('danger', !layoutEditMode);
-      btn.textContent = 'EDIT LAYOUT';
-      btn.setAttribute('aria-pressed', layoutEditMode ? 'true' : 'false');
-    }
+    syncLayoutEditButton_();
     if (layoutEditMode) {
       document.querySelectorAll('.itemRow[data-id]').forEach(row => { row.querySelectorAll('[data-field]').forEach(inp => { inp.disabled = true; }); });
     } else {
       applyInventoryColumnStateToDom_();
     }
     refreshHiddenFieldCells_();
+    updateSelectedFieldAdjustButtons_();
+  }
+  function syncLayoutEditButton_(){
+    const btn = document.getElementById('toggleLayoutEditBtn');
+    if (btn) {
+      btn.classList.toggle('success', !!layoutEditMode);
+      btn.classList.toggle('danger', !layoutEditMode);
+      btn.textContent = 'MOVE';
+      btn.setAttribute('aria-pressed', layoutEditMode ? 'true' : 'false');
+    }
   }
   function queueRightNavResync_(){
     if (SIMPLE_RIGHT_NAV) return;
@@ -895,6 +1275,7 @@ let manageDistKey = '';
     if (groupTypeModalOpen) closeGroupTypeModal();
     if (typeGroupModalOpen) closeTypeGroupModal();
     if (groupEditOpen) closeGroupEditModal();
+    if (batchRecipesModalOpen) closeBatchRecipesModal();
     if (sectionEditOpen) closeSectionEditModal();
     if (deleteSectionsModalOpen) closeDeleteSectionsModal();
   }
@@ -1012,9 +1393,6 @@ let manageDistKey = '';
     const el = document.getElementById('customizeOverlay');
     if (el) el.style.display = 'none';
   }
-  function customizeOverlayClick(e){
-    closeCustomizeModal();
-  }
   function cacheDefaultUi_(){
     if (defaultUiText) return;
     const companyEl = document.querySelector('.companyName');
@@ -1057,6 +1435,7 @@ let manageDistKey = '';
         case 'orderGuidesOverlay': return 'Order Guides';
         case 'inventoryColumnsOverlay': return 'Inventory Inputs';
         case 'settingsOverlay': return 'Settings';
+        case 'batchRecipesOverlay': return 'Batch Recipes';
         case 'settingsPinOverlay': return 'Settings PIN';
         case 'customizeOverlay': return 'Customize';
         case 'clearOverlay': return 'Clear Fields';
@@ -1425,6 +1804,17 @@ let manageDistKey = '';
       current = parentByGroup.get(current);
     }
     return chain;
+  }
+  function isSectionInBehindBarGroup_(sectionKey){
+    const targetName = norm_('BEHIND BAR');
+    const targetKey = norm_(makeSectionKeyClient_('BEHIND BAR'));
+    return getGroupChainForSectionKey_(sectionKey).some(group => {
+      const name = String(group?.name || '').trim();
+      const key = String(group?.key || '').trim();
+      return norm_(name) === targetName ||
+        norm_(key) === targetKey ||
+        norm_(makeSectionKeyClient_(name)) === targetKey;
+    });
   }
   function getGroupAncestorChain_(groupKey){
     const key = String(groupKey || '').trim();
@@ -2031,6 +2421,7 @@ let manageDistKey = '';
         btn.style.removeProperty('--btn-custom-hl');
       }
     });
+    if (editModalOpen) updateEditRemoveButtonLabel_();
   }
   function applyInputVisibilitySettings_(){
     const hide = !!uiSettings?.hideDisabledInputs;
@@ -2796,7 +3187,7 @@ ${pagesHtml}
   }
   /* EDIT MODAL */
   function openEditModalFromRow(id, rowEl){
-    if (blockLayoutInput_('edit items')) return;
+    // Allowed during Layout Edit mode — drag is disabled while a modal is open.
     const item = findItemById_(id);
     if (!item){
       window.alert("Item not found.");
@@ -2813,6 +3204,8 @@ ${pagesHtml}
     const el = document.getElementById('editOverlay');
     if (el) el.style.display = 'flex';
     updateEditMoveButtons_();
+    updateArchiveButtonLabel_();
+    updateEditRemoveButtonLabel_();
   }
   function closeEditModal(){
     editModalOpen = false;
@@ -2822,9 +3215,6 @@ ${pagesHtml}
     editModalSectionType = 'home';
     const el = document.getElementById('editOverlay');
     if (el) el.style.display = 'none';
-  }
-  function editOverlayClick(e){
-    closeEditModal();
   }
   function renderEditModal_(item, sectionLabel, sectionKey){
     const infoEl = document.getElementById('editInfo');
@@ -2977,6 +3367,11 @@ ${pagesHtml}
     const errors = [];
     if (!nextDetails.commonName) errors.push('Common name is required.');
     if (!nextDetails.section) errors.push('Section is required.');
+    const usedInBatchRecipe = (batchRecipes || []).some(recipe =>
+      (Array.isArray(recipe?.ingredients) ? recipe.ingredients : []).some(ingredient => String(ingredient?.itemId || '') === String(id)));
+    if (usedInBatchRecipe && !Number.isFinite(parseBottleSizeMlClient_(nextDetails.bottleSize))) {
+      errors.push('This batch-recipe item needs a bottle size such as 750 ML or 25.4 FL OZ.');
+    }
     if (nextDetails.par && !/^\d+(\.\d+)?$/.test(nextDetails.par)) errors.push('Par must be a number.');
     if (nextDetails.cost && !/^\$?\d+(\.\d{1,2})?$/.test(nextDetails.cost)) errors.push('Cost must be a valid dollar amount.');
     if (nextDetails.csSize && !/^\d+(\.\d+)?$/.test(nextDetails.csSize)) errors.push('Case size must be a number.');
@@ -3078,6 +3473,9 @@ ${pagesHtml}
         }
         setBanner(null, null);
         setSavePill("ok", "Saved");
+        if (res?.batchContributions && typeof res.batchContributions === 'object') {
+          batchContributions = res.batchContributions;
+        }
         const item = findItemById_(id);
         if (item){
           item.section = nextDetails.section;
@@ -3117,6 +3515,7 @@ ${pagesHtml}
           applyFilter();
         } else {
           rebuildAllRows_();
+          if (res?.batchContributions) applyFilter();
         }
       })
       .withFailureHandler(err => {
@@ -3149,6 +3548,7 @@ ${pagesHtml}
       jEl.dataset.baseAllow = enable3 ? '1' : '0';
       jEl.disabled = layoutEditMode || !(enable3 && groupAllow3 && isSectionColumnEnabled_(sectionLabel, 'j'));
     }
+    refreshBehindBarDragEligibilityForRow_(row);
     refreshHiddenFieldCellsForRow_(row);
   }
   function applyLockStateToRows_(id, enable1, enable2, enable3){
@@ -3842,10 +4242,13 @@ ${pagesHtml}
         syncInventoryColumnSettings_();
         secondarySections = data.secondarySections || [];
         sectionShortcuts = (uiSettings && typeof uiSettings.sectionShortcuts === 'object') ? uiSettings.sectionShortcuts : {};
+        archivedItems = new Set((Array.isArray(uiSettings.archivedItemIds) ? uiSettings.archivedItemIds : []).map(v => String(v || '').trim()).filter(Boolean));
         distributors = data.distributors || [];
         orderGuideSheets = data.orderGuideSheets || [];
         orderGuideSheetNames = data.orderGuideSheetNames || data.orderGuideSheets || [];
         sectionGroups = data.sectionGroups || [];
+        batchRecipes = Array.isArray(data.batchRecipes) ? data.batchRecipes : [];
+        batchContributions = (data.batchContributions && typeof data.batchContributions === 'object') ? data.batchContributions : {};
         vendors = data.vendors || [];
         categories = data.categories || [];
         rebuildAllRows_();
@@ -4007,7 +4410,15 @@ ${pagesHtml}
       type: 'secondary',
       dynamicType: 'type'
     })).filter(s => s.heading && s.key);
-    sectionsMeta = home.concat(secondary, distributorMeta, typeMeta);
+    const batchMeta = (batchRecipes || []).map(recipe => ({
+      heading: String(recipe?.name || ''),
+      key: batchSectionKey_(recipe),
+      row: null,
+      type: 'secondary',
+      dynamicType: 'batch',
+      batchRecipeId: String(recipe?.id || '')
+    })).filter(s => s.heading && s.key && s.batchRecipeId);
+    sectionsMeta = home.concat(secondary, batchMeta, distributorMeta, typeMeta);
   }
   function getGroupKeyClient_(group){
     if (!group || typeof group !== 'object') return '';
@@ -4129,14 +4540,72 @@ ${pagesHtml}
       const key = sec.key || makeSectionKeyClient_(label);
       rows.push({ type: 'header', label, key, row: null, sectionType: 'secondary' });
       const ids = Array.isArray(sec.itemIds) ? sec.itemIds : [];
+      // Render in stored itemIds order so manual reordering sticks (secondary
+      // locations are user-orderable, unlike the auto-sorted dynamic groups).
       const items = ids.map(id => baseItems.get(String(id || ''))).filter(Boolean);
-      items.sort((a, b) => String(a.b || '').localeCompare(String(b.b || '')));
       items.forEach(item => {
         rows.push(Object.assign({}, item, {
           section: label,
           sectionType: 'secondary',
           refSectionKey: key
         }));
+      });
+    });
+    (Array.isArray(batchRecipes) ? batchRecipes : []).forEach(recipe => {
+      const label = String(recipe?.name || '').trim();
+      const recipeId = String(recipe?.id || '').trim();
+      const key = batchSectionKey_(recipe);
+      if (!label || !recipeId || !key) return;
+      rows.push({
+        type: 'header',
+        label,
+        key,
+        row: null,
+        sectionType: 'secondary',
+        dynamicType: 'batch',
+        batchRecipeId: recipeId,
+        batchBottleCount: Number(recipe?.bottleCount) || 0
+      });
+      (Array.isArray(recipe?.ingredients) ? recipe.ingredients : []).forEach((ingredient, ingredientIndex) => {
+        const item = baseItems.get(String(ingredient?.itemId || '').trim());
+        if (item) {
+          rows.push(Object.assign({}, item, {
+            section: label,
+            sectionType: 'secondary',
+            refSectionKey: key,
+            dynamicType: 'batch',
+            isShortcut: true,
+            isBatchIngredient: true,
+            batchRecipeId: recipeId,
+            batchBottleEquivalent: calculateRecipeIngredientBottles_(recipe, ingredient, item)
+          }));
+          return;
+        }
+        const customName = String(ingredient?.name || '').trim();
+        if (!customName) return;
+        rows.push({
+          type: 'item',
+          id: `${recipeId}__custom_${ingredientIndex}`,
+          b: customName,
+          orderName: String(ingredient?.orderName || ''),
+          bottleSize: String(ingredient?.packageSize || ''),
+          par: String(ingredient?.par || ''),
+          categoryN: String(ingredient?.categoryN || ''),
+          vendor: String(ingredient?.vendor || ''),
+          o: String(ingredient?.vendor || ''),
+          cost: String(ingredient?.cost || ''),
+          csSize: String(ingredient?.csSize || ''),
+          notes: String(ingredient?.notes || ''),
+          section: label,
+          sectionType: 'secondary',
+          refSectionKey: key,
+          dynamicType: 'batch',
+          isBatchIngredient: true,
+          isRecipeOnlyIngredient: true,
+          batchRecipeId: recipeId,
+          batchRecipeAmount: Number(ingredient?.amount) || 0,
+          batchRecipeUnit: normalizeVolumeUnitClient_(ingredient?.unit) || 'ML'
+        });
       });
     });
     (distributorSections || []).forEach(sec => {
@@ -4269,78 +4738,229 @@ ${pagesHtml}
     filterDebounceTimer = 0;
     const q = (document.getElementById("q").value || "").trim().toLowerCase();
     const hasQuery = !!q;
-    if (hasQuery) {
+    const editMode = !!layoutEditMode;
+    const wasActive = searchActive;
+    searchFocusTarget_ = null;
+
+    // Layout Edit + query: show the draggable results palette; otherwise hide it.
+    if (hasQuery && editMode) renderSearchPalette_(q);
+    else closeSearchPalette_(false);
+
+    if (hasQuery && !editMode) {
+      // Edit mode OFF: collapse everything and focus only the match under
+      // BY BEVERAGE (falling back to the item's home location). Snapshot the
+      // prior view so Clear can restore it.
       if (!searchActive) {
         searchActive = true;
         searchCollapsedSnapshot = { ...(collapsedByKey || {}) };
         groupCollapsedSnapshot = { ...(groupCollapsedByKey || {}) };
+        searchScrollSnapshot = window.pageYOffset || 0;
       }
-      sectionsMeta.forEach(s => { collapsedByKey[s.key] = false; });
-      getRenderGroups_().forEach(g => {
-        const key = getGroupKeyClient_(g);
-        if (key) groupCollapsedByKey[key] = false;
-      });
-    } else if (searchActive) {
+      focusSearchUnderByBeverage_(q);
+    } else if (!hasQuery && searchActive) {
+      // Clear: restore the pre-search collapse configuration (and scroll).
       const restored = searchCollapsedSnapshot || {};
       collapsedByKey = { ...restored };
       sectionsMeta.forEach(s => {
-        if (!Object.prototype.hasOwnProperty.call(collapsedByKey, s.key)) {
-          collapsedByKey[s.key] = false;
-        }
+        if (!Object.prototype.hasOwnProperty.call(collapsedByKey, s.key)) collapsedByKey[s.key] = false;
       });
       saveCollapsed_(collapsedByKey);
       const groupRestored = groupCollapsedSnapshot || {};
       groupCollapsedByKey = { ...groupRestored };
       getRenderGroups_().forEach(g => {
         const key = getGroupKeyClient_(g);
-        if (!key) return;
-        if (!Object.prototype.hasOwnProperty.call(groupCollapsedByKey, key)) {
-          groupCollapsedByKey[key] = false;
-        }
+        if (key && !Object.prototype.hasOwnProperty.call(groupCollapsedByKey, key)) groupCollapsedByKey[key] = false;
       });
       saveGroupCollapsed_(groupCollapsedByKey);
       searchActive = false;
       searchCollapsedSnapshot = null;
       groupCollapsedSnapshot = null;
     }
+    // Edit mode ON + query: intentionally leave the current collapse state alone
+    // (don't collapse the group/section being worked on).
+
+    // Always render the full structure now; search "focuses" via collapse state
+    // rather than hiding non-matching sections.
     const out = [];
     let currentHeader = null;
     let buffer = [];
-    let hasMatch = false;
     function flush(){
-      const includeEmpty = !hasQuery && currentHeader && String(currentHeader.dynamicType || '') === 'type';
-      if (currentHeader && (hasQuery ? hasMatch : buffer.length > 0 || includeEmpty)){
+      const includeEmpty = currentHeader && String(currentHeader.dynamicType || '') === 'type';
+      if (currentHeader && (buffer.length > 0 || includeEmpty)){
         out.push(currentHeader);
         out.push(...buffer);
       }
       currentHeader = null;
       buffer = [];
-      hasMatch = false;
     }
     for (const r of allRows){
       if (!r) continue;
-      if (r.type === "header"){
-        flush();
-        currentHeader = r;
-        continue;
-      }
-      if (r.type === "item"){
-        if (!hasQuery){
-          buffer.push(r);
-        } else {
-          const match = String(r.b ?? "").toLowerCase().includes(q);
-          if (match){
-            hasMatch = true;
-            buffer.push(r);
-          }
-        }
-      }
+      if (r.type === "header"){ flush(); currentHeader = r; continue; }
+      if (r.type === "item"){ buffer.push(r); }
     }
     flush();
     lastFilteredRows = out;
     render(out);
     buildRightNav_();
     setStatus(summary_(allRows));
+
+    if (hasQuery && !editMode && searchFocusTarget_) {
+      const t = searchFocusTarget_;
+      if (t.sectionKey) scrollToSectionHeading_(t.sectionKey);
+      const row = (t.id && t.sectionKey
+        ? document.querySelector(`.sectionBody[data-section-body="${cssEscape_(t.sectionKey)}"] .itemRow[data-id="${cssEscape_(t.id)}"]`)
+        : null) || (t.id ? document.querySelector(`.itemRow[data-id="${cssEscape_(t.id)}"]`) : null);
+      if (row) {
+        try { row.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) {}
+        flash_(row, 'blue');
+      }
+    } else if (!hasQuery && wasActive) {
+      const y = searchScrollSnapshot || 0;
+      try { window.scrollTo({ top: y, behavior: 'smooth' }); } catch (e) { window.scrollTo(0, y); }
+    }
+  }
+  // Edit-mode-OFF search: collapse all groups/sections except BY BEVERAGE and
+  // the matched item's category section; fall back to the item's home location
+  // if it has no beverage category. Sets searchFocusTarget_ for scroll/flash.
+  function focusSearchUnderByBeverage_(q){
+    let target = null;   // match under a BY BEVERAGE (type) section
+    let firstAny = null; // any match (fallback)
+    let curKey = '';
+    let curIsType = false;
+    for (const r of allRows){
+      if (!r) continue;
+      if (r.type === 'header'){
+        curKey = String(r.key || '');
+        curIsType = String(r.dynamicType || '') === 'type';
+        continue;
+      }
+      if (r.type === 'item'){
+        if (!String(r.b ?? '').toLowerCase().includes(q)) continue;
+        if (!firstAny) firstAny = { id: String(r.id || '') };
+        if (curIsType && !target) target = { sectionKey: curKey, id: String(r.id || '') };
+      }
+    }
+    const expandGroups = new Set();
+    const expandSections = new Set();
+    if (target) {
+      expandGroups.add(norm_(ALL_ITEMS_GROUP_KEY));
+      expandGroups.add(norm_(TYPE_GROUP_KEY));
+      expandSections.add(norm_(target.sectionKey));
+      searchFocusTarget_ = target;
+    } else if (firstAny) {
+      const item = findItemById_(firstAny.id);
+      const homeKey = makeSectionKeyClient_(item?.section || '');
+      if (homeKey) expandSections.add(norm_(homeKey));
+      getGroupChainForSectionKey_(homeKey).forEach(meta => { if (meta && meta.key) expandGroups.add(norm_(meta.key)); });
+      searchFocusTarget_ = { sectionKey: homeKey, id: firstAny.id };
+    }
+    getRenderGroups_().forEach(g => {
+      const key = getGroupKeyClient_(g);
+      if (key) groupCollapsedByKey[key] = !expandGroups.has(norm_(key));
+    });
+    (sectionsMeta || []).forEach(s => {
+      if (s && s.key) collapsedByKey[s.key] = !expandSections.has(norm_(s.key));
+    });
+  }
+  // ---- Layout-Edit search results palette (drag an item onto a section) ----
+  let paletteDrag_ = null;
+  function renderSearchPalette_(q){
+    const panel = document.getElementById('searchResultsPalette');
+    const list = document.getElementById('searchPaletteList');
+    if (!panel || !list) return;
+    const query = String(q || '').trim().toLowerCase();
+    const seen = new Set();
+    const matches = [];
+    (allRows || []).forEach(r => {
+      if (!r || r.type !== 'item') return;
+      const id = String(r.id || '').trim();
+      if (!id || seen.has(id)) return;
+      if (!String(r.b ?? '').toLowerCase().includes(query)) return;
+      seen.add(id);
+      matches.push({ id, name: String(r.b || ''), section: String(r.section || '') });
+    });
+    matches.sort((a, b) => a.name.localeCompare(b.name));
+    list.innerHTML = matches.length
+      ? matches.map(m => `<div class="searchPaletteItem" data-id="${escapeHtml(m.id)}"><span class="spName">${escapeHtml(m.name)}</span><span class="spSec">${escapeHtml(m.section)}</span></div>`).join('')
+      : `<div class="searchPaletteEmpty">No matches.</div>`;
+    panel.style.display = 'flex';
+    wireSearchPaletteDrag_();
+  }
+  function closeSearchPalette_(clearInput){
+    const panel = document.getElementById('searchResultsPalette');
+    if (panel) panel.style.display = 'none';
+    if (clearInput) {
+      const qi = document.getElementById('q');
+      if (qi) { qi.value = ''; applyFilter(); }
+    }
+  }
+  function wireSearchPaletteDrag_(){
+    document.querySelectorAll('#searchPaletteList .searchPaletteItem').forEach(el => {
+      if (el.dataset.bound === '1') return;
+      el.dataset.bound = '1';
+      el.addEventListener('pointerdown', onPalettePointerDown_);
+    });
+  }
+  function onPalettePointerDown_(e){
+    const el = e.currentTarget;
+    const id = el.getAttribute('data-id');
+    if (!id) return;
+    e.preventDefault();
+    const ghost = document.createElement('div');
+    ghost.className = 'searchPaletteGhost';
+    ghost.textContent = el.querySelector('.spName')?.textContent || id;
+    document.body.appendChild(ghost);
+    paletteDrag_ = { id, ghost };
+    movePaletteGhost_(e);
+    window.addEventListener('pointermove', onPalettePointerMove_);
+    window.addEventListener('pointerup', onPalettePointerUp_);
+    window.addEventListener('pointercancel', onPalettePointerUp_);
+  }
+  function movePaletteGhost_(e){
+    if (paletteDrag_ && paletteDrag_.ghost){
+      paletteDrag_.ghost.style.left = e.clientX + 'px';
+      paletteDrag_.ghost.style.top = e.clientY + 'px';
+    }
+  }
+  function clearPaletteDropHover_(){
+    document.querySelectorAll('.sectionDropHover').forEach(x => x.classList.remove('sectionDropHover'));
+  }
+  function paletteDropSectionFromPoint_(x, y){
+    const el = document.elementFromPoint(x, y);
+    if (!el || !el.closest) return null;
+    const body = el.closest('.sectionBody[data-section-body]');
+    if (body){
+      const key = body.getAttribute('data-section-body');
+      const head = document.querySelector(`.group[data-section-key="${cssEscape_(key)}"]`);
+      return { key, el: head || body };
+    }
+    const head = el.closest('.group[data-section-key]');
+    if (head) return { key: head.getAttribute('data-section-key'), el: head };
+    return null;
+  }
+  function onPalettePointerMove_(e){
+    if (!paletteDrag_) return;
+    movePaletteGhost_(e);
+    clearPaletteDropHover_();
+    const sec = paletteDropSectionFromPoint_(e.clientX, e.clientY);
+    if (sec && sec.el && sec.key && !isDynamicHomeSectionKey_(sec.key)) sec.el.classList.add('sectionDropHover');
+  }
+  function onPalettePointerUp_(e){
+    window.removeEventListener('pointermove', onPalettePointerMove_);
+    window.removeEventListener('pointerup', onPalettePointerUp_);
+    window.removeEventListener('pointercancel', onPalettePointerUp_);
+    const drag = paletteDrag_;
+    paletteDrag_ = null;
+    clearPaletteDropHover_();
+    if (drag && drag.ghost) drag.ghost.remove();
+    if (!drag) return;
+    const sec = paletteDropSectionFromPoint_(e.clientX, e.clientY);
+    if (!sec || !sec.key) return;
+    if (isDynamicHomeSectionKey_(sec.key)) return;        // not BY DISTRIBUTOR/BEVERAGE
+    const label = findSectionLabelByKey_(sec.key) || '';
+    if (isNeutralHomeLabel_(label)) return;               // not the hidden ALL ITEMS parking section
+    copyItemToSectionShortcut_(drag.id, sec.key);
+    setStatus(`Added item ${drag.id} to ${label || sec.key}.`);
   }
   function liveFieldValue_(id, field, fallback){
     const row = document.querySelector(`.itemRow[data-id="${cssEscape_(id)}"]`);
@@ -4352,6 +4972,57 @@ ${pagesHtml}
   function parseCount_(value){
     const num = parseFloat(String(value ?? '').trim());
     return Number.isFinite(num) ? num : 0;
+  }
+  function normalizeVolumeUnitClient_(unit){
+    const raw = String(unit || '').trim().toUpperCase().replace(/[.]/g, '').replace(/\s+/g, ' ');
+    if (raw === 'ML' || raw === 'MILLILITER' || raw === 'MILLILITERS') return 'ML';
+    if (raw === 'L' || raw === 'LITER' || raw === 'LITERS' || raw === 'LITRE' || raw === 'LITRES') return 'L';
+    if (raw === 'FL OZ' || raw === 'FLOZ' || raw === 'FLUID OUNCE' || raw === 'FLUID OUNCES' || raw === 'OZ') return 'FL OZ';
+    return '';
+  }
+  function volumeToMlClient_(amount, unit){
+    const value = Number(amount);
+    if (!Number.isFinite(value) || value <= 0) return NaN;
+    const normalized = normalizeVolumeUnitClient_(unit);
+    if (normalized === 'ML') return value;
+    if (normalized === 'L') return value * 1000;
+    if (normalized === 'FL OZ') return value * 29.5735295625;
+    return NaN;
+  }
+  function parseBottleSizeMlClient_(raw){
+    const match = String(raw || '').trim().match(/^\s*(\d+(?:\.\d+)?)\s*(ML|MILLILITERS?|LIT(?:ER|RE)S?|L|FL\.?\s*OZ\.?|FLOZ|FLUID\s+OUNCES?|OZ)\s*$/i);
+    return match ? volumeToMlClient_(match[1], match[2]) : NaN;
+  }
+  function batchSectionKey_(recipe){
+    const id = String(recipe?.id || '').trim();
+    return id ? `BATCH_RECIPE_${id.replace(/[^A-Za-z0-9]+/g, '_').toUpperCase()}` : '';
+  }
+  function findBatchRecipe_(id){
+    const key = String(id || '').trim();
+    return (batchRecipes || []).find(recipe => String(recipe?.id || '').trim() === key) || null;
+  }
+  function calculateRecipeIngredientBottles_(recipe, ingredient, item){
+    const bottleCount = Number(recipe?.bottleCount) || 0;
+    const yieldMl = volumeToMlClient_(recipe?.yieldAmount, recipe?.yieldUnit);
+    const batchBottleMl = volumeToMlClient_(recipe?.bottleSizeAmount, recipe?.bottleSizeUnit);
+    const ingredientMl = volumeToMlClient_(ingredient?.amount, ingredient?.unit);
+    const itemBottleMl = parseBottleSizeMlClient_(item?.bottleSize);
+    if (bottleCount <= 0 || ![yieldMl, batchBottleMl, ingredientMl, itemBottleMl].every(Number.isFinite)) return 0;
+    return ((bottleCount * batchBottleMl) / yieldMl) * (ingredientMl / itemBottleMl);
+  }
+  function getBatchContributionForItem_(id){
+    const value = Number(batchContributions?.[String(id || '')]);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }
+  function formatBatchBottles_(value){
+    const number = Number(value);
+    if (!Number.isFinite(number)) return '0.0';
+    return (Math.round(number * 10) / 10).toFixed(1);
+  }
+  function formatBatchIngredientAmount_(value){
+    const number = Number(value);
+    if (!Number.isFinite(number)) return '0';
+    return String(Math.round(number * 100) / 100);
   }
   function formatTotal_(num){
     if (!Number.isFinite(num)) return '';
@@ -4401,7 +5072,9 @@ ${pagesHtml}
         const id = String(r.id || '');
         const sectionBreak = firstInSection && !suppressNextBreak;
         const barVal = blank ? '' : liveFieldValue_(id, 'g', r.g);
-        const otherVal = blank ? '' : liveFieldValue_(id, 'h', r.h);
+        const otherRaw = blank ? '' : liveFieldValue_(id, 'h', r.h);
+        const batchOther = blank ? 0 : getBatchContributionForItem_(id);
+        const otherVal = batchOther > 0 ? formatTotal_(parseCount_(otherRaw) + batchOther) : otherRaw;
         const backVal = blank ? '' : liveFieldValue_(id, 'j', r.j);
         const hasAny = !blank && [barVal, otherVal, backVal].some(v => String(v ?? '').trim() !== '');
         const total = hasAny
@@ -4548,12 +5221,14 @@ ${pagesHtml}
     wireAutosave_();
     wireRowFocusHighlights_();
     wireRowClickFocus_();
+    wireBehindBarDrag_();
     wireCollapsers_();
     wireGroupCollapsers_();
     wireGroupEditButtons_();
     wireLayoutDrag_();
     wireSectionEditButtons_();
     wireItemEditButtons_();
+    wireBatchBottleCounts_();
     wireSectionEditOrderButtons_();
     wireEditModalActionButtons_();
     wireEditModalOrderButtons_();
@@ -4591,7 +5266,18 @@ ${pagesHtml}
     return clone;
   }
   function getRenderGroups_(){
-    const base = Array.isArray(sectionGroups) ? sectionGroups.slice() : [];
+    const base = Array.isArray(sectionGroups) ? sectionGroups.map(group => Object.assign({}, group, {
+      sectionKeys: Array.isArray(group?.sectionKeys) ? group.sectionKeys.slice() : [],
+      groupKeys: Array.isArray(group?.groupKeys) ? group.groupKeys.slice() : []
+    })) : [];
+    (batchRecipes || []).forEach(recipe => {
+      const groupKey = norm_(recipe?.groupKey || '');
+      const sectionKey = batchSectionKey_(recipe);
+      if (!groupKey || !sectionKey) return;
+      const group = base.find(entry => norm_(getGroupKeyClient_(entry)) === groupKey);
+      if (!group) return;
+      if (!group.sectionKeys.some(key => norm_(key) === norm_(sectionKey))) group.sectionKeys.push(sectionKey);
+    });
     const distroKeys = (distributorSections || []).map(sec => String(sec.key || '').trim()).filter(Boolean);
     const typeKeys = (typeSections || []).map(sec => String(sec.key || '').trim()).filter(Boolean);
     if (!distroKeys.length && !typeKeys.length) return base;
@@ -5271,11 +5957,13 @@ function appendLineEditorRow_(list, line, opts){
       if (addSpacer) out += `<div class="sectionSpacer"></div>`;
       const currentSectionLabel = String(r.label || "");
       const currentSectionKey = String(r.key || "");
+      const isBehindBarSection = isSectionInBehindBarGroup_(currentSectionKey);
       const cfg = fieldCfgForSection_(currentSectionLabel);
       const key = r.key;
       const isCollapsed = !!collapsedByKey[key];
       const dynamicType = String(r.dynamicType || '').trim();
       const isDistributorDynamic = dynamicType === 'distributor';
+      const isBatchDynamic = dynamicType === 'batch';
       const isDynamic = !!dynamicType;
       const headingAlign = getSectionHeadingAlign_(currentSectionLabel);
       const headingAlignAttr = headingAlign ? ` data-heading-align="${escapeHtml(headingAlign)}"` : '';
@@ -5283,10 +5971,10 @@ function appendLineEditorRow_(list, line, opts){
       const sectionVars = getSectionStyleVars_(currentSectionLabel);
       const sectionStyleAttr = sectionVars.style ? ` style="${escapeHtml(sectionVars.style)}"` : '';
       const sectionColorAttr = sectionVars.color ? ' data-section-color="1"' : '';
-      const canEditSection = !isDynamic || isDistributorDynamic;
-      const editTitle = isDistributorDynamic ? 'Edit distributor' : 'Edit section';
+      const canEditSection = !isDynamic || isDistributorDynamic || isBatchDynamic;
+      const editTitle = isDistributorDynamic ? 'Edit distributor' : isBatchDynamic ? 'Edit batch recipe' : 'Edit section';
       const editButton = canEditSection ? `
-              <button class="sectionEditBtn" type="button" title="${editTitle}" aria-label="${editTitle}" data-section-action="${isDistributorDynamic ? 'distributor' : 'section'}" data-btn-key="section-edit" data-btn-rename="1" data-btn-icon="1" data-btn-default="${editTitle}">
+              <button class="sectionEditBtn" type="button" title="${editTitle}" aria-label="${editTitle}" data-section-action="${isDistributorDynamic ? 'distributor' : isBatchDynamic ? 'batch' : 'section'}"${isBatchDynamic ? ` data-batch-recipe-id="${escapeHtml(r.batchRecipeId || '')}"` : ''} data-btn-key="section-edit" data-btn-rename="1" data-btn-icon="1" data-btn-default="${editTitle}">
                 <svg class="editIcon" viewBox="0 0 24 24" stroke-width="1.5" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                   <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
                   <path d="M12 15C13.6569 15 15 13.6569 15 12C15 10.3431 13.6569 9 12 9C10.3431 9 9 10.3431 9 12C9 13.6569 10.3431 15 12 15Z" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
@@ -5294,6 +5982,12 @@ function appendLineEditorRow_(list, line, opts){
                   <path d="M15 12L22 12" stroke="#ffffff" stroke-width="1.5"></path>
                 </svg>
               </button>
+      ` : '';
+      const batchHeaderControls = isBatchDynamic ? `
+        <label class="batchBottleCount" onclick="event.stopPropagation()">
+          <span>BATCH BOTTLES</span>
+          <input type="number" min="0" step="0.1" inputmode="decimal" value="${escapeHtml(formatBatchBottles_(r.batchBottleCount || 0))}" data-batch-count-id="${escapeHtml(r.batchRecipeId || '')}" aria-label="${escapeHtml(r.label)} batch bottle count" />
+        </label>
       ` : '';
       const sectionLinesBefore = renderLineRowsForAnchor_(lineIndex, 'section', currentSectionKey, 'before');
       if (sectionLinesBefore) out += sectionLinesBefore;
@@ -5306,11 +6000,11 @@ function appendLineEditorRow_(list, line, opts){
             </div>
           </div>
           <div class="groupRight">
-            <div class="groupSub sectionSubGrid">
+            ${batchHeaderControls || `<div class="groupSub sectionSubGrid">
               <span data-field="g">${escapeHtml(cfg.labels[1])}</span>
               <span data-field="h">${escapeHtml(cfg.labels[2])}</span>
               <span data-field="j">${escapeHtml(cfg.labels[3])}</span>
-            </div>
+            </div>`}
             <div class="chev" aria-hidden="true">▾</div>
           </div>
         </div>
@@ -5324,6 +6018,23 @@ function appendLineEditorRow_(list, line, opts){
         if (itemLinesBefore) out += itemLinesBefore;
         itemIndex += 1;
         const zebraClass = (itemIndex % 2 === 0) ? 'zebra' : '';
+        if (item.isBatchIngredient) {
+          const customMeta = item.isRecipeOnlyIngredient
+            ? [item.vendor, item.cost].filter(Boolean).join(' · ')
+            : '';
+          out += `
+            <div class="itemRow batchIngredientRow ${item.isRecipeOnlyIngredient ? 'recipeOnlyIngredientRow ' : ''}${zebraClass}" data-id="${idEsc}" data-batch-recipe-id="${escapeHtml(item.batchRecipeId || '')}" title="${escapeHtml(item.b)}">
+              <div class="itemName"><span>${escapeHtml(item.b)}</span>${item.isRecipeOnlyIngredient ? `<small>RECIPE-ONLY${customMeta ? ` · ${escapeHtml(customMeta)}` : ''}</small>` : ''}</div>
+              <div class="batchIngredientAmount">
+                <strong>${escapeHtml(item.isRecipeOnlyIngredient ? formatBatchIngredientAmount_(item.batchRecipeAmount) : formatBatchBottles_(item.batchBottleEquivalent || 0))}</strong>
+                <span>${escapeHtml(item.isRecipeOnlyIngredient ? `${item.batchRecipeUnit === 'FL OZ' ? 'FL OZ' : 'ML'} / BATCH` : 'BOTTLES')}</span>
+              </div>
+            </div>
+          `;
+          const itemLinesAfter = itemLineKey ? renderLineRowsForAnchor_(lineIndex, 'item', itemLineKey, 'after') : '';
+          if (itemLinesAfter) out += itemLinesAfter;
+          return;
+        }
         const baseAllow1 = !!(item.editable?.g) && !cfg.forceDisable[1];
         const baseAllow2 = !!(item.editable?.h) && !cfg.forceDisable[2];
         const baseAllow3 = !!(item.editable?.j) && !cfg.forceDisable[3];
@@ -5334,9 +6045,10 @@ function appendLineEditorRow_(list, line, opts){
         const allow1 = baseAllow1 && groupAllow1 && isSectionColumnEnabled_(currentSectionLabel, 'g');
         const allow2 = baseAllow2 && groupAllow2 && isSectionColumnEnabled_(currentSectionLabel, 'h');
         const allow3 = baseAllow3 && groupAllow3 && isSectionColumnEnabled_(currentSectionLabel, 'j');
-        const canEdit1 = allow1 && !layoutEditMode;
-        const canEdit2 = allow2 && !layoutEditMode;
-        const canEdit3 = allow3 && !layoutEditMode;
+        const isArchived = isItemArchived_(itemId);
+        const canEdit1 = allow1 && !layoutEditMode && !isArchived;
+        const canEdit2 = allow2 && !layoutEditMode && !isArchived;
+        const canEdit3 = allow3 && !layoutEditMode && !isArchived;
         const numAttrs = `inputmode="decimal" pattern="[0-9]*" enterkeyhint="done" autocapitalize="off" autocomplete="off"`;
         const isRedWine = norm_(currentSectionLabel) === 'RED WINE';
         const isInUseItem = isRedWine && RED_WINE_INUSE_ITEMS.has(norm_(item.b));
@@ -5345,7 +6057,7 @@ function appendLineEditorRow_(list, line, opts){
           ? `<select data-field="h" data-base-allow="${baseAllow2 ? '1' : '0'}" ${canEdit2 ? '' : 'disabled'}>${makeInUseOptions_(item.h)}</select>`
           : `<input type="text" ${numAttrs} data-field="h" data-base-allow="${baseAllow2 ? '1' : '0'}" value="${escapeHtml(item.h)}" ${canEdit2 ? "" : "disabled"} />`;
         out += `
-          <div class="itemRow ${zebraClass}" data-id="${idEsc}" data-section-label="${escapeHtml(currentSectionLabel)}" data-section-key="${escapeHtml(currentSectionKey)}" data-section-type="${escapeHtml(item.sectionType || 'home')}" title="${escapeHtml(item.b)} (ID ${idEsc})">
+          <div class="itemRow ${zebraClass}${isArchived ? ' archived' : ''}${isBehindBarSection && allow1 && !isArchived ? ' behindBarDragRow' : ''}" data-id="${idEsc}" data-section-label="${escapeHtml(currentSectionLabel)}" data-section-key="${escapeHtml(currentSectionKey)}" data-section-type="${escapeHtml(item.sectionType || 'home')}"${isArchived ? ' data-archived="1"' : ''} title="${escapeHtml(item.b)} (ID ${idEsc})">
             <button class="itemEditBtn" type="button" title="Edit item" aria-label="Edit item" data-item-id="${idEsc}" data-btn-key="item-edit" data-btn-rename="1" data-btn-icon="1" data-btn-default="Edit item">
               <svg class="editIcon" viewBox="0 0 24 24" stroke-width="1.5" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                 <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
@@ -5520,6 +6232,9 @@ function appendLineEditorRow_(list, line, opts){
           if (dynamicType === 'distributor') {
             const label = header.querySelector('.groupTitle div')?.textContent || '';
             openManageDistributorForName_(label);
+          } else if (dynamicType === 'batch') {
+            const recipeId = btn.getAttribute('data-batch-recipe-id') || '';
+            openBatchRecipeEditor_(recipeId);
           }
           return;
         }
@@ -5528,6 +6243,46 @@ function appendLineEditorRow_(list, line, opts){
         const key = header.getAttribute('data-section-key') || makeSectionKeyClient_(label || '');
         const type = header.getAttribute('data-section-type') || 'home';
         openSectionEditModal_(row, label, key, type);
+      });
+    });
+  }
+  function wireBatchBottleCounts_(){
+    document.querySelectorAll('input[data-batch-count-id]').forEach(input => {
+      if (input.dataset.bound === '1') return;
+      input.dataset.bound = '1';
+      input.addEventListener('click', e => e.stopPropagation());
+      input.addEventListener('dblclick', e => e.stopPropagation());
+      input.addEventListener('change', () => {
+        const id = String(input.getAttribute('data-batch-count-id') || '').trim();
+        const value = Number(input.value);
+        if (!id || !Number.isFinite(value) || value < 0) {
+          setBanner('error', 'Batch bottle count must be zero or greater.');
+          return;
+        }
+        if (batchBottleSaveTimers.has(id)) clearTimeout(batchBottleSaveTimers.get(id));
+        const timer = window.setTimeout(() => {
+          batchBottleSaveTimers.delete(id);
+          setSavePill('saving', 'Saving…');
+          google.script.run
+            .withSuccessHandler(res => {
+              if (!res?.ok) {
+                setSavePill('err', 'Error');
+                setBanner('error', res?.message || 'Could not save batch bottle count.');
+                return;
+              }
+              batchRecipes = Array.isArray(res.recipes) ? res.recipes : batchRecipes;
+              batchContributions = (res.batchContributions && typeof res.batchContributions === 'object') ? res.batchContributions : {};
+              rebuildAllRows_();
+              applyFilter();
+              setSavePill('ok', 'Saved');
+            })
+            .withFailureHandler(err => {
+              setSavePill('err', 'Error');
+              setBanner('error', 'Batch count save error: ' + (err && err.message ? err.message : err));
+            })
+            .setBatchRecipeBottleCount({ id, bottleCount: value });
+        }, 250);
+        batchBottleSaveTimers.set(id, timer);
       });
     });
   }
@@ -5686,10 +6441,24 @@ function appendLineEditorRow_(list, line, opts){
   function buildRightNav_(){
     const nav = document.getElementById('rightNav');
     nav.innerHTML = '';
+    nav.scrollTop = 0;
     tabButtonsByKey = {};
     groupButtonsByKey = {};
     allBtn = null;
     rightButtonsInOrder = [];
+    const moveBtn = document.createElement('button');
+    moveBtn.id = 'toggleLayoutEditBtn';
+    moveBtn.className = 'tabBtn layoutEditFab moveRibbonBtn';
+    moveBtn.textContent = 'MOVE';
+    moveBtn.dataset.btnKey = 'settings-layout';
+    moveBtn.dataset.btnRename = '0';
+    moveBtn.setAttribute('aria-label', 'Move layout');
+    moveBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      toggleLayoutEditMode_();
+    });
+    nav.appendChild(moveBtn);
+    syncLayoutEditButton_();
     const topBtn = document.createElement('button');
     topBtn.className = 'tabBtn topBtn';
     topBtn.textContent = 'TOP';
@@ -5757,6 +6526,8 @@ function appendLineEditorRow_(list, line, opts){
     allBtn = all;
     updateRightTabStates_();
     applyNavPositions_();
+    applyButtonSettings_();
+    scheduleNavTopSync_();
   }
 function buildLeftNav_(){
   const nav = document.getElementById('leftNav');
@@ -5890,6 +6661,7 @@ function buildLeftNav_(){
     if (!bar) return;
     const offset = keyboardAwareActive ? getKeyboardOffset_() : 0;
     bar.style.transform = offset ? `translateY(-${offset}px)` : '';
+    scheduleNavTopSync_();
   }
   function wireKeyboardAwareSearch_(){
     if (keyboardListenerBound) return;
@@ -5929,7 +6701,8 @@ function buildLeftNav_(){
     const header = document.querySelector('header');
     const headerRect = header ? header.getBoundingClientRect() : null;
     const headerBottom = headerRect && Number.isFinite(headerRect.bottom) ? headerRect.bottom : null;
-    const rightMinTop = headerBottom !== null ? Math.max(navBaseTopPx, headerBottom) : navBaseTopPx;
+    const rightMinTop = headerBottom !== null ? Math.max(navBaseTopPx, headerBottom + 8) : navBaseTopPx;
+    rightTopPx = rightMinTop;
     if (firstHeader) {
       const rect = firstHeader.getBoundingClientRect();
       if (Number.isFinite(rect.top)) {
@@ -5937,20 +6710,48 @@ function buildLeftNav_(){
         const leftMinTop = navBaseTopPx - overscroll;
         if (rect.top <= navBaseTopPx) leftTopPx = Math.max(leftMinTop, rect.top);
         else leftTopPx = rect.top;
-        if (rect.top <= rightMinTop) rightTopPx = rightMinTop;
-        else rightTopPx = rect.top;
       }
     }
+    const bottomBar = document.querySelector('.bottomBar');
+    const bottomRect = bottomBar && window.getComputedStyle(bottomBar).display !== 'none'
+      ? bottomBar.getBoundingClientRect()
+      : null;
+    const viewportBottom = window.visualViewport
+      ? Math.min(window.innerHeight, window.visualViewport.offsetTop + window.visualViewport.height)
+      : window.innerHeight;
+    const availableBottom = bottomRect && Number.isFinite(bottomRect.top)
+      ? Math.min(viewportBottom, bottomRect.top - 8)
+      : viewportBottom - 8;
+    const moveButton = rightNav.querySelector('#toggleLayoutEditBtn');
+    const measuredButtonHeight = moveButton ? moveButton.getBoundingClientRect().height : 0;
+    const navButtonHeight = Number.isFinite(measuredButtonHeight) && measuredButtonHeight > 0
+      ? measuredButtonHeight
+      : NAV_BASE_HEIGHT;
+    rightTopPx = Math.min(rightTopPx, Math.max(8, availableBottom - navButtonHeight));
+    const rightHeight = Math.max(navButtonHeight, availableBottom - rightTopPx);
     const leftTopValue = `${Math.round(leftTopPx)}px`;
     const rightTopValue = `${Math.round(rightTopPx)}px`;
     if (leftNav.style.top !== leftTopValue) leftNav.style.top = leftTopValue;
     if (rightNav.style.top !== rightTopValue) rightNav.style.top = rightTopValue;
+    const rightHeightValue = `${Math.max(1, Math.round(rightHeight))}px`;
+    if (rightNav.style.maxHeight !== rightHeightValue) rightNav.style.maxHeight = rightHeightValue;
   }
   function wireNavTopSync_(){
     if (navTopSyncWired) return;
     navTopSyncWired = true;
     window.addEventListener('scroll', scheduleNavTopSync_, { passive: true });
     window.addEventListener('resize', scheduleNavTopSync_);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', scheduleNavTopSync_);
+      window.visualViewport.addEventListener('scroll', scheduleNavTopSync_);
+    }
+    if (window.ResizeObserver) {
+      navResizeObserver = new ResizeObserver(scheduleNavTopSync_);
+      const header = document.querySelector('header');
+      const bottomBar = document.querySelector('.bottomBar');
+      if (header) navResizeObserver.observe(header);
+      if (bottomBar) navResizeObserver.observe(bottomBar);
+    }
     scheduleNavTopSync_();
   }
   function updateRightTabStates_(){
@@ -6130,6 +6931,9 @@ function buildLeftNav_(){
       if (!(target instanceof Element)) return;
       if (!target.matches('.itemRow [data-field]')) return;
       const row = target.closest('.itemRow');
+      if (target instanceof HTMLInputElement) rememberSelectedItemField_(target);
+      else selectedItemField = null;
+      updateSelectedFieldAdjustButtons_();
       if (row) row.classList.add('rowFocus');
     });
     document.addEventListener('focusout', (e) => {
@@ -6146,12 +6950,77 @@ function buildLeftNav_(){
       }, 0);
     });
   }
+  function rememberSelectedItemField_(input){
+    if (!(input instanceof HTMLInputElement)) return;
+    const row = input.closest('.itemRow[data-id]');
+    const field = String(input.getAttribute('data-field') || '').trim();
+    const id = String(row?.getAttribute('data-id') || '').trim();
+    if (!row || !field || !id) return;
+    selectedItemField = { id, field, input };
+  }
+  function getSelectedItemInput_(){
+    const active = document.activeElement;
+    if (active instanceof HTMLInputElement && active.matches('.itemRow[data-id] input[data-field]')) {
+      rememberSelectedItemField_(active);
+      return active;
+    }
+    if (!selectedItemField) return null;
+    let input = selectedItemField.input;
+    if (!(input instanceof HTMLInputElement) || !document.contains(input) || !isVisible_(input)) {
+      const rows = getRowsByItemId_(selectedItemField.id);
+      input = null;
+      for (const row of rows) {
+        const candidate = row.querySelector(`input[data-field="${cssEscape_(selectedItemField.field)}"]`);
+        if (candidate && isVisible_(candidate)) {
+          input = candidate;
+          break;
+        }
+      }
+      if (!input) return null;
+      selectedItemField.input = input;
+    }
+    return input;
+  }
+  function updateSelectedFieldAdjustButtons_(){
+    const decrease = document.getElementById('decreaseSelectedFieldBtn');
+    const increase = document.getElementById('increaseSelectedFieldBtn');
+    if (!decrease || !increase) return;
+    const input = getSelectedItemInput_();
+    const enabled = !!input && !input.disabled && !layoutEditMode;
+    decrease.disabled = !enabled;
+    increase.disabled = !enabled;
+  }
+  function adjustSelectedItemField_(direction){
+    const step = Number(direction) < 0 ? -1 : 1;
+    const input = getSelectedItemInput_();
+    if (!input || input.disabled || layoutEditMode) {
+      updateSelectedFieldAdjustButtons_();
+      return;
+    }
+    const raw = String(input.value ?? '').trim();
+    const current = raw === '' ? 0 : Number(raw);
+    if (!Number.isFinite(current)) {
+      setBanner('warn', 'Select an item field containing a numeric value.');
+      return;
+    }
+    const next = Math.max(0, Math.round((current + step) * 1000000) / 1000000);
+    input.value = String(next);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.focus({ preventScroll: true });
+    input.scrollIntoView({ behavior:'smooth', block:'nearest' });
+    updateSelectedFieldAdjustButtons_();
+  }
   function wireRowClickFocus_(){
     if (rowClickFocusWired) return;
     rowClickFocusWired = true;
     const container = document.getElementById('rows');
     if (!container) return;
     container.addEventListener('click', (e) => {
+      if (Date.now() < behindBarDragSuppressClickUntil) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (layoutEditMode) return;
       const target = e.target;
       if (!(target instanceof Element)) return;
@@ -6160,6 +7029,106 @@ function buildLeftNav_(){
       if (!row) return;
       focusFirstEditableField_(row);
     });
+  }
+  function formatBehindBarDragValue_(tenths){
+    const value = Math.max(0, Math.min(10, Math.round(Number(tenths) || 0))) / 10;
+    return value === 0 || value === 1 ? String(value) : value.toFixed(1);
+  }
+  function setBehindBarDragValue_(state, tenths){
+    if (!state) return;
+    const nextTenths = Math.max(0, Math.min(10, Math.round(Number(tenths) || 0)));
+    if (state.currentTenths === nextTenths) return;
+    state.currentTenths = nextTenths;
+    const value = formatBehindBarDragValue_(nextTenths);
+    state.input.value = value;
+    syncRowFieldValue_(state.id, 'g', value, state.input);
+  }
+  function wireBehindBarDrag_(){
+    if (behindBarDragWired) return;
+    const container = document.getElementById('rows');
+    if (!container) return;
+    behindBarDragWired = true;
+    container.addEventListener('pointerdown', handleBehindBarDragPointerDown_, { passive: false });
+  }
+  function handleBehindBarDragPointerDown_(e){
+    if (layoutEditMode || currentPage !== 'inventory' || getActiveOverlay_()) return;
+    if (behindBarDragState) return;
+    if (e.isPrimary === false) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+    const row = target.closest('.itemRow.behindBarDragRow[data-id]');
+    if (!row || target.closest('button, input, select, textarea, label, a')) return;
+    const input = row.querySelector('input[data-field="g"]');
+    if (!input || input.disabled) return;
+    const inputRect = input.getBoundingClientRect();
+    const isLeftSurface = e.clientX < inputRect.left && !!target.closest('.itemName');
+    const isRightSurface = e.clientX > inputRect.right && !!target.closest('.cell[data-field-cell] .label');
+    if (!isLeftSurface && !isRightSurface) return;
+    const raw = String(input.value ?? '');
+    const parsed = Number.parseFloat(raw);
+    const startTenths = Math.round(Math.max(0, Math.min(1, Number.isFinite(parsed) ? parsed : 0)) * 10);
+    behindBarDragState = {
+      pointerId: e.pointerId,
+      row,
+      input,
+      id: String(row.getAttribute('data-id') || ''),
+      startY: e.clientY,
+      startRaw: raw,
+      startTenths,
+      currentTenths: startTenths,
+      dragging: false
+    };
+    row.setPointerCapture?.(e.pointerId);
+    window.addEventListener('pointermove', handleBehindBarDragPointerMove_, { passive: false });
+    window.addEventListener('pointerup', handleBehindBarDragPointerUp_);
+    window.addEventListener('pointercancel', handleBehindBarDragPointerCancel_);
+  }
+  function handleBehindBarDragPointerMove_(e){
+    const state = behindBarDragState;
+    if (!state || state.pointerId !== e.pointerId) return;
+    const deltaY = e.clientY - state.startY;
+    if (!state.dragging && Math.abs(deltaY) < 8) return;
+    state.dragging = true;
+    state.row.classList.add('behindBarDragActive');
+    e.preventDefault();
+    const stepCount = Math.floor(Math.abs(deltaY) / BEHIND_BAR_DRAG_STEP_PX);
+    const stepDelta = deltaY < 0 ? stepCount : -stepCount;
+    setBehindBarDragValue_(state, state.startTenths + stepDelta);
+  }
+  function finishBehindBarDrag_(e, commit){
+    const state = behindBarDragState;
+    if (!state || (e && state.pointerId !== e.pointerId)) return;
+    window.removeEventListener('pointermove', handleBehindBarDragPointerMove_);
+    window.removeEventListener('pointerup', handleBehindBarDragPointerUp_);
+    window.removeEventListener('pointercancel', handleBehindBarDragPointerCancel_);
+    try { state.row.releasePointerCapture?.(state.pointerId); } catch (err) {}
+    state.row.classList.remove('behindBarDragActive');
+    if (!commit && state.dragging) {
+      state.input.value = state.startRaw;
+      syncRowFieldValue_(state.id, 'g', state.startRaw, state.input);
+    }
+    if (commit && state.dragging) {
+      const next = formatBehindBarDragValue_(state.currentTenths);
+      const changed = next !== state.startRaw;
+      state.input.value = next;
+      syncRowFieldValue_(state.id, 'g', next, state.input);
+      if (changed) state.input.dispatchEvent(new Event('input', { bubbles: true }));
+      behindBarDragSuppressClickUntil = Date.now() + 500;
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
+    }
+    behindBarDragState = null;
+  }
+  function handleBehindBarDragPointerUp_(e){
+    finishBehindBarDrag_(e, true);
+  }
+  function handleBehindBarDragPointerCancel_(e){
+    finishBehindBarDrag_(e, false);
+  }
+  function cancelBehindBarDrag_(revert){
+    if (!behindBarDragState) return;
+    finishBehindBarDrag_(null, !revert);
   }
   function wireLayoutDrag_(){
     if (layoutDragWired) return;
@@ -6196,7 +7165,10 @@ function buildLeftNav_(){
       type = 'line';
       sourceEl = lineRow;
     } else if (itemRow) {
-      if (itemRow.getAttribute('data-section-type') === 'secondary') return;
+      // Secondary rows are draggable only inside a reorderable secondary section
+      // (not shortcuts pinned into home sections, not the dynamic groups).
+      if (itemRow.getAttribute('data-section-type') === 'secondary' &&
+          !isReorderableSecondarySection_(itemRow.getAttribute('data-section-key') || '')) return;
       type = 'item';
       sourceEl = itemRow;
     } else if (groupHeader) {
@@ -6290,7 +7262,12 @@ function buildLeftNav_(){
   function getLayoutItemDropTarget_(hit, clientX, clientY, sourceEl){
     const row = hit.closest('.itemRow[data-id]');
     if (row && row !== sourceEl) {
-      if (row.getAttribute('data-section-type') === 'secondary') return null;
+      if (row.getAttribute('data-section-type') === 'secondary') {
+        // Allow only reordering within the same reorderable secondary section.
+        const rKey = row.getAttribute('data-section-key') || '';
+        const sKey = sourceEl ? (sourceEl.getAttribute('data-section-key') || '') : '';
+        if (!isReorderableSecondarySection_(rKey) || norm_(rKey) !== norm_(sKey)) return null;
+      }
       const rect = row.getBoundingClientRect();
       const before = clientY < rect.top + rect.height / 2;
       return {
@@ -6514,6 +7491,33 @@ function buildLeftNav_(){
       })
       .saveInventEdits([{ id, vendor }]);
   }
+  function reorderSecondaryItem_(sectionKey, sourceId, targetId, position){
+    const key = String(sectionKey || '').trim();
+    const sid = String(sourceId || '').trim();
+    const tid = String(targetId || '').trim();
+    if (!key || !sid || !tid || sid === tid) return;
+    const sec = (Array.isArray(secondarySections) ? secondarySections : [])
+      .find(s => String(s && s.key || '') === key);
+    if (!sec || !Array.isArray(sec.itemIds)) return;
+    let ids = sec.itemIds.map(x => String(x || '').trim()).filter(Boolean);
+    ids = ids.filter(x => x !== sid);
+    const idx = ids.indexOf(tid);
+    if (idx === -1) return;
+    ids.splice(position === 'after' ? idx + 1 : idx, 0, sid);
+    sec.itemIds = ids;
+    uiSettings = uiSettings && typeof uiSettings === 'object' ? uiSettings : {};
+    uiSettings.secondarySections = secondarySections;
+    rebuildAllRows_();
+    applyFilter();
+    setSavePill("saving", "Saving…");
+    google.script.run
+      .withSuccessHandler(() => { setSavePill("ok", "Saved"); })
+      .withFailureHandler(err => {
+        setSavePill("err", "Error");
+        setBanner("error", "Reorder save error: " + (err && err.message ? err.message : err));
+      })
+      .saveUiSettings(uiSettings);
+  }
   function performLayoutItemDrop_(drop, sourceEl){
     const sourceId = sourceEl?.getAttribute('data-id') || '';
     if (!sourceId) return;
@@ -6527,6 +7531,14 @@ function buildLeftNav_(){
       const targetSectionKey = targetRow?.getAttribute('data-section-key') || '';
       const targetIsDistributor = isDistributorSectionKey_(targetSectionKey);
       if (!targetId || targetId === sourceId) return;
+      // Reorder within a secondary/location section (stored item order).
+      if (sourceEl?.getAttribute('data-section-type') === 'secondary' &&
+          targetRow?.getAttribute('data-section-type') === 'secondary' &&
+          norm_(sourceSectionKey) === norm_(targetSectionKey) &&
+          isReorderableSecondarySection_(sourceSectionKey)) {
+        reorderSecondaryItem_(sourceSectionKey, sourceId, targetId, drop.position);
+        return;
+      }
       if (!targetSection) return;
       if (targetIsDistributor) {
         moveItemToDistributor_(sourceId, targetSection);
@@ -7218,9 +8230,6 @@ function buildLeftNav_(){
     const el = document.getElementById('clearOverlay');
     if (el) el.style.display = 'none';
   }
-  function clearOverlayClick(e){
-    closeClearModal();
-  }
   function confirmClearSelectedSections_(){
     const allBox = document.getElementById('clearAllBox');
     const useAll = !!(allBox && allBox.checked);
@@ -7416,6 +8425,83 @@ function buildLeftNav_(){
         deleteEditItem_();
       });
     }
+    const arch = document.getElementById('editArchiveBtn');
+    if (arch && arch.dataset.bound !== "1") {
+      arch.dataset.bound = "1";
+      arch.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleArchiveEditItem_();
+      });
+    }
+  }
+  function isItemArchived_(id){
+    return archivedItems.has(String(id || '').trim());
+  }
+  function updateArchiveButtonLabel_(){
+    const btn = document.getElementById('editArchiveBtn');
+    if (!btn) return;
+    btn.textContent = isItemArchived_(editModalItemId) ? 'Unarchive' : 'Archive';
+  }
+  function getEditSourceSectionKey_(){
+    const row = editModalSourceRow && editModalSourceRow.getAttribute
+      ? editModalSourceRow
+      : (editModalItemId ? document.querySelector(`.itemRow[data-id="${cssEscape_(editModalItemId)}"]`) : null);
+    return row ? String(row.getAttribute('data-section-key') || '').trim() : '';
+  }
+  function updateEditRemoveButtonLabel_(){
+    const btn = document.getElementById('editDeleteBtn');
+    if (!btn) return;
+    const permanent = isDynamicHomeSectionKey_(getEditSourceSectionKey_());
+    btn.textContent = permanent ? 'DELETE' : 'REMOVE';
+    btn.setAttribute('aria-label', permanent ? 'Delete item permanently' : 'Remove item from this location');
+    btn.title = permanent
+      ? 'Delete this item from all locations permanently'
+      : 'Remove this item from this location only';
+  }
+  function toggleArchiveEditItem_(){
+    const id = String(editModalItemId || '').trim();
+    if (!id) return;
+    const willArchive = !isItemArchived_(id);
+    const item = findItemById_(id) || {};
+    const vendor = String(item.vendor ?? item.o ?? '').trim();
+    const categoryN = String(item.categoryN ?? '').trim();
+    closeEditModal();
+    // Optimistic local update so the UI grays/restores immediately.
+    if (willArchive) archivedItems.add(id); else archivedItems.delete(id);
+    applyFilter();
+    setSavePill("saving", "Saving…");
+    setStatus(willArchive ? `Archiving item ${id}…` : `Unarchiving item ${id}…`);
+    setBanner(null, null);
+    google.script.run
+      .withSuccessHandler(res => {
+        if (!res || res.ok === false) {
+          setSavePill("err", "Error");
+          setBanner("warn", (res && res.message) || "Archive update failed.");
+          // Revert optimistic change.
+          if (willArchive) archivedItems.delete(id); else archivedItems.add(id);
+          applyFilter();
+          return;
+        }
+        // Sync from the server's authoritative list.
+        if (Array.isArray(res.archivedItemIds)) {
+          archivedItems = new Set(res.archivedItemIds.map(v => String(v || '').trim()).filter(Boolean));
+          uiSettings = uiSettings && typeof uiSettings === 'object' ? uiSettings : {};
+          uiSettings.archivedItemIds = res.archivedItemIds.slice();
+        }
+        setSavePill("ok", "Saved");
+        setStatus(willArchive
+          ? `Archived item ${id} (removed from its order guide).`
+          : `Unarchived item ${id} (restored to its order guide).`);
+        applyFilter();
+      })
+      .withFailureHandler(err => {
+        setSavePill("err", "Error");
+        setBanner("error", "Archive error: " + (err && err.message ? err.message : err));
+        if (willArchive) archivedItems.delete(id); else archivedItems.add(id);
+        applyFilter();
+      })
+      .setItemArchived({ id, archived: willArchive, vendor, categoryN });
   }
   function duplicateEditItem_(){
     if (!editModalItemId) return;
@@ -7508,21 +8594,18 @@ function buildLeftNav_(){
     if (!id) return;
     const item = findItemById_(id);
     const name = item?.b ? ` "${item.b}"` : '';
-    // Which section/group was the delete triggered from?
-    const sourceRow = (editModalSourceRow && editModalSourceRow.getAttribute)
-      ? editModalSourceRow
-      : document.querySelector(`.itemRow[data-id="${cssEscape_(id)}"]`);
-    const sectionKey = sourceRow ? String(sourceRow.getAttribute('data-section-key') || '').trim() : '';
+    const sectionKey = getEditSourceSectionKey_();
     closeEditModal();
-    // Inside ALL ITEMS (BY DISTRIBUTOR / BY BEVERAGE) -> full removal from the system.
+    // BY DISTRIBUTOR / BY BEVERAGE are the only permanent-delete locations.
     if (isDynamicHomeSectionKey_(sectionKey)) {
-      const ok = window.confirm(`Delete item${name} (ID ${id}) from the entire system? This removes it from the spreadsheet and every group, and cannot be undone.`);
+      const ok = window.confirm(`Delete item${name} (ID ${id}) from ALL LOCATIONS PERMANENTLY? This cannot be undone.`);
       if (!ok) return;
-      performFullItemDelete_(id);
+      performFullItemDelete_(id, sectionKey);
       return;
     }
-    // Anywhere else -> let the user choose the scope.
-    openDeleteItemScopeModal_(id, name, sectionKey);
+    // Every other row is a location-specific appearance. Remove only this one;
+    // the item remains available in BY DISTRIBUTOR and BY BEVERAGE.
+    removeItemFromCurrentGroup_(id, sectionKey);
   }
   // Drop any queued/pending autosave state for an item (used after a full
   // delete) so a later flush doesn't try to save a row that no longer exists.
@@ -7543,7 +8626,7 @@ function buildLeftNav_(){
     });
     if (changed) { persistPendingEdits_(); updatePendingPill_(); }
   }
-  function performFullItemDelete_(id){
+  function performFullItemDelete_(id, sourceSectionKey){
     setStatus(`Deleting item ${id}…`);
     setSavePill("saving","Deleting…");
     setBanner(null, null);
@@ -7557,6 +8640,11 @@ function buildLeftNav_(){
         if (res?.missingIds?.length){
           setSavePill("err", "Missing ID");
           setBanner("warn", "Could not find ID(s): " + res.missingIds.join(", "));
+          return;
+        }
+        if (res?.ok === false){
+          setSavePill("err", "Blocked");
+          setBanner("warn", res?.message || "Permanent deletion is only allowed from BY DISTRIBUTOR or BY BEVERAGE.");
           return;
         }
         setSavePill("ok","Deleted");
@@ -7585,7 +8673,7 @@ function buildLeftNav_(){
         setBanner("error", "Delete error: " + (err && err.message ? err.message : err));
         setStatus("");
       })
-      .deleteInventItem({ id });
+      .deleteInventItem({ id, sourceSectionKey });
   }
   // Remove every shortcut/secondary appearance of an item from local UI state.
   function stripItemFromAllAppearances_(id){
@@ -7621,36 +8709,23 @@ function buildLeftNav_(){
       })
       .saveUiSettings(uiSettings);
   }
-  function openDeleteItemScopeModal_(id, name, sectionKey){
-    deleteScopeItemId = String(id || '');
-    deleteScopeSectionKey = String(sectionKey || '');
-    const info = document.getElementById('deleteItemScopeInfo');
-    if (info) {
-      info.textContent = `Remove item${name} (ID ${id})? It stays in BY DISTRIBUTOR & BY BEVERAGE unless you delete it from there.`;
-    }
-    const ov = document.getElementById('deleteItemScopeOverlay');
-    if (ov) ov.classList.add('active');
+  function itemHasBothDynamicHomes_(id){
+    const target = String(id || '').trim();
+    if (!target) return false;
+    const contains = section => (Array.isArray(section?.itemIds) ? section.itemIds : [])
+      .some(itemId => String(itemId || '').trim() === target);
+    return (distributorSections || []).some(contains) && (typeSections || []).some(contains);
   }
-  function closeDeleteItemScopeModal_(){
-    const ov = document.getElementById('deleteItemScopeOverlay');
-    if (ov) ov.classList.remove('active');
-    deleteScopeItemId = '';
-    deleteScopeSectionKey = '';
-  }
-  function deleteItemScopeOverlayClick(e){
-    if (e.target === e.currentTarget) closeDeleteItemScopeModal_();
-  }
-  function confirmDeleteItemScope_(scope){
-    const id = deleteScopeItemId;
-    const sectionKey = deleteScopeSectionKey;
-    closeDeleteItemScopeModal_();
-    if (!id) return;
-    if (scope === 'current') removeItemFromCurrentGroup_(id, sectionKey);
-    else if (scope === 'allButDynamic') removeItemFromAllButDynamic_(id);
+  function requireDynamicHomesForRemoval_(id){
+    if (itemHasBothDynamicHomes_(id)) return true;
+    setSavePill("err", "Blocked");
+    setBanner("warn", "This item must appear in both BY DISTRIBUTOR and BY BEVERAGE before it can be removed from a location. Set its distributor and beverage category, and make sure neither is excluded from those groups.");
+    return false;
   }
   function removeItemFromCurrentGroup_(id, sectionKey){
     const key = String(sectionKey || '').trim();
     const target = String(id || '');
+    if (!requireDynamicHomesForRemoval_(target)) return;
     // Shortcut appearance inside another home section.
     const map = (sectionShortcuts && typeof sectionShortcuts === 'object') ? sectionShortcuts : {};
     if (key && Array.isArray(map[key]) && map[key].some(x => String(x) === target)) {
@@ -7671,26 +8746,11 @@ function buildLeftNav_(){
     }
     // Otherwise this is the item's real home (or a standalone item on the main
     // page): detach it by parking the row in the neutral ALL ITEMS home.
-    parkItemInNeutralHome_(id, { stripOthers: false });
+    parkItemInNeutralHome_(id);
   }
-  function removeItemFromAllButDynamic_(id){
-    // Strip every shortcut/secondary appearance, then park the home row in the
-    // neutral ALL ITEMS section so the item only remains in the dynamic groups.
-    parkItemInNeutralHome_(id, { stripOthers: true });
-  }
-  function parkItemInNeutralHome_(id, opts){
-    const stripOthers = !!(opts && opts.stripOthers);
-    // Parking moves the row into the hidden ALL ITEMS home, where it only shows
-    // via the dynamic groups. An item with no distributor AND no category won't
-    // appear in either dynamic group, so it would vanish from the UI entirely.
-    const item = findItemById_(id);
-    const hasDistributor = !!normalizeDistributorName_(item?.vendor || item?.o || '');
-    const hasCategory = !!String(item?.categoryN || '').trim();
-    if (!hasDistributor && !hasCategory) {
-      setSavePill("err", "Blocked");
-      setBanner("warn", "This item has no distributor or beverage type, so removing it here would hide it from the app. Set one first, or fully delete it from BY DISTRIBUTOR / BY BEVERAGE.");
-      return;
-    }
+  function parkItemInNeutralHome_(id){
+    // Parking moves the physical INVENT row into the hidden ALL ITEMS section;
+    // the caller has already verified both dynamic home appearances exist.
     setStatus(`Updating item ${id}…`);
     setSavePill("saving","Saving…");
     setBanner(null, null);
@@ -7708,21 +8768,11 @@ function buildLeftNav_(){
         }
         // Reflect the home move in local data.
         updateRowSectionLocal_(id, NEUTRAL_HOME_LABEL);
-        const appearancesChanged = stripOthers && stripItemFromAllAppearances_(id);
         rebuildAllRows_();
-        const finalize = () => {
-          setSavePill("ok","Saved");
-          setStatus(stripOthers
-            ? `Removed item ${id} from all but BY DISTRIBUTOR & BY BEVERAGE.`
-            : `Removed item ${id} from this group.`);
-          buildRightNav_();
-          applyFilter();
-        };
-        // Only gate on the settings save when shortcuts/secondary actually
-        // changed; the home move already succeeded on the server, so don't let
-        // an unrelated saveUiSettings failure block the local update.
-        if (appearancesChanged) persistAppearanceSettings_(finalize);
-        else finalize();
+        setSavePill("ok","Saved");
+        setStatus(`Removed item ${id} from this group.`);
+        buildRightNav_();
+        applyFilter();
       })
       .withFailureHandler(err => {
         setSavePill("err","Error");
@@ -7853,9 +8903,6 @@ function buildLeftNav_(){
     sectionEditOldGroupKey = "";
     const el = document.getElementById('sectionEditOverlay');
     if (el) el.style.display = 'none';
-  }
-  function sectionEditOverlayClick(e){
-    closeSectionEditModal();
   }
   function saveSectionEditModal(){
     const nextRaw = (document.getElementById('sectionEditName')?.value || '').trim();
@@ -8388,10 +9435,6 @@ function buildLeftNav_(){
     document.getElementById('addOverlay').style.display = 'none';
     syncAddButton_();
   }
-  function addOverlayClick(e){
-    // click outside modal closes
-    closeAddModal();
-  }
   function openAddMenu(){
     if (blockLayoutInput_('add items or sections')) return;
     addMenuOpen = true;
@@ -8404,9 +9447,6 @@ function buildLeftNav_(){
     const el = document.getElementById('addMenuOverlay');
     if (el) el.style.display = 'none';
     syncAddButton_();
-  }
-  function addMenuOverlayClick(e){
-    closeAddMenu();
   }
   function openAddItemFromMenu_(){
     closeAddMenu();
@@ -8855,9 +9895,6 @@ function buildLeftNav_(){
     if (el) el.style.display = 'none';
     syncAddButton_();
   }
-  function addSectionOverlayClick(e){
-    closeAddSectionModal();
-  }
   function saveNewSection_(){
     const type = document.querySelector('input[name="newSectionType"]:checked')?.value || 'home';
     const multi = !!document.getElementById('addSectionMulti')?.checked;
@@ -9087,9 +10124,6 @@ function buildLeftNav_(){
     if (el) el.style.display = 'none';
     syncAddButton_();
   }
-  function addGroupOverlayClick(e){
-    closeAddGroupModal();
-  }
   function saveNewGroup_(){
     const name = (document.getElementById('newGroupName')?.value || '').trim();
     if (!name){
@@ -9232,9 +10266,6 @@ function buildLeftNav_(){
     const el = document.getElementById('groupTypeOverlay');
     if (el) el.style.display = 'none';
   }
-  function groupTypeOverlayClick(e){
-    closeGroupTypeModal();
-  }
   function getAutoCategoryOptions_(){
     const map = new Map();
     (Array.isArray(categories) ? categories : []).forEach(cat => {
@@ -9279,9 +10310,6 @@ function buildLeftNav_(){
     typeGroupModalOpen = false;
     const el = document.getElementById('typeGroupOverlay');
     if (el) el.style.display = 'none';
-  }
-  function typeGroupOverlayClick(e){
-    closeTypeGroupModal();
   }
   function renderTypeGroupFilters_(){
     const catList = document.getElementById('typeCategoryList');
@@ -9357,7 +10385,7 @@ function buildLeftNav_(){
       .saveUiSettings(uiSettings);
   }
   function openGroupEditModal_(groupKey){
-    if (blockLayoutInput_('edit groups')) return;
+    // Allowed during Layout Edit mode — drag is disabled while a modal is open.
     const key = String(groupKey || '').trim();
     if (!key) return;
     const group = findGroupByKey_(key);
@@ -9447,9 +10475,6 @@ function buildLeftNav_(){
     groupEditOldParentKey = "";
     const el = document.getElementById('groupEditOverlay');
     if (el) el.style.display = 'none';
-  }
-  function groupEditOverlayClick(e){
-    closeGroupEditModal();
   }
   function deleteGroupFromEdit_(){
     const key = groupEditKey || '';
@@ -9549,6 +10574,11 @@ function buildLeftNav_(){
           if (!Object.keys(updated.columns).length) delete updated.columns;
         }
         const newKey = getGroupKeyClient_(updated) || updated.key || oldKey;
+        if (norm_(newKey) !== norm_(oldKey)) {
+          batchRecipes = (batchRecipes || []).map(recipe => norm_(recipe?.groupKey || '') === norm_(oldKey)
+            ? Object.assign({}, recipe, { groupKey: newKey })
+            : recipe);
+        }
         if (Array.isArray(res?.groups)) {
           sectionGroups = res.groups;
         } else {
@@ -9684,9 +10714,6 @@ function buildLeftNav_(){
     const el = document.getElementById('addDistributorOverlay');
     if (el) el.style.display = 'none';
     syncAddButton_();
-  }
-  function addDistributorOverlayClick(e){
-    closeAddDistributorModal();
   }
   function nextDistributorStep_(step){
     const steps = Array.from(document.querySelectorAll('#addDistributorOverlay .wizardStep'));
@@ -9983,9 +11010,6 @@ function buildLeftNav_(){
     const el = document.getElementById('distributorsOverlay');
     if (el) el.style.display = 'none';
   }
-  function distributorsOverlayClick(e){
-    closeDistributorsModal();
-  }
   function renderDistributorsModal_(){
     const list = document.getElementById('distributorsList');
     if (!list) return;
@@ -10040,9 +11064,6 @@ function buildLeftNav_(){
     endCategoryDrag_();
     const el = document.getElementById('manageDistributorsOverlay');
     if (el) el.style.display = 'none';
-  }
-  function manageDistributorsOverlayClick(e){
-    closeManageDistributorsModal();
   }
   function getDistributorByKeyClient_(key){
     const raw = norm_(key || '');
@@ -10497,38 +11518,43 @@ function buildLeftNav_(){
     if (usedLabels) usedLabels.add(norm_(candidate));
     return candidate;
   }
-  loadPendingEdits_();
-  loadPendingMeta_();
-  updatePendingPill_();
-  // Warn before leaving if edits haven't reached the server yet (data safety).
-  window.addEventListener('beforeunload', (e) => {
-    if (pendingCount_() > 0) {
-      e.preventDefault();
-      e.returnValue = '';
-      return '';
-    }
-  });
-  updateRightTabStates_();
-  document.addEventListener('keydown', handleGlobalKeyNav_);
-  document.addEventListener('pointermove', handleAddSectionPointerMove_);
-  document.addEventListener('pointermove', handleAddGroupPointerMove_);
-  document.addEventListener('pointermove', handleCategoryPointerMove_);
-  document.addEventListener('pointerup', endAddSectionDrag_);
-  document.addEventListener('pointerup', endAddGroupDrag_);
-  document.addEventListener('pointerup', endCategoryDrag_);
-  document.addEventListener('pointercancel', endAddSectionDrag_);
-  document.addEventListener('pointercancel', endAddGroupDrag_);
-  document.addEventListener('pointercancel', endCategoryDrag_);
-  const importInput = document.getElementById('settingsImportFile');
-  if (importInput && importInput.dataset.bound !== "1") {
-    importInput.dataset.bound = "1";
-    importInput.addEventListener('change', (e) => {
-      const file = e.target.files && e.target.files[0];
-      handleImportWebappFile_(file);
+  function initializeAppAfterLaunch_(){
+    if (!launchPinUnlocked || appInitializationStarted) return;
+    appInitializationStarted = true;
+    loadPendingEdits_();
+    loadPendingMeta_();
+    updatePendingPill_();
+    // Warn before leaving if edits haven't reached the server yet (data safety).
+    window.addEventListener('beforeunload', (e) => {
+      if (pendingCount_() > 0) {
+        e.preventDefault();
+        e.returnValue = '';
+        return '';
+      }
     });
+    updateRightTabStates_();
+    document.addEventListener('keydown', handleGlobalKeyNav_);
+    document.addEventListener('pointermove', handleAddSectionPointerMove_);
+    document.addEventListener('pointermove', handleAddGroupPointerMove_);
+    document.addEventListener('pointermove', handleCategoryPointerMove_);
+    document.addEventListener('pointerup', endAddSectionDrag_);
+    document.addEventListener('pointerup', endAddGroupDrag_);
+    document.addEventListener('pointerup', endCategoryDrag_);
+    document.addEventListener('pointercancel', endAddSectionDrag_);
+    document.addEventListener('pointercancel', endAddGroupDrag_);
+    document.addEventListener('pointercancel', endCategoryDrag_);
+    const importInput = document.getElementById('settingsImportFile');
+    if (importInput && importInput.dataset.bound !== "1") {
+      importInput.dataset.bound = "1";
+      importInput.addEventListener('change', (e) => {
+        const file = e.target.files && e.target.files[0];
+        handleImportWebappFile_(file);
+      });
+    }
+    cacheDefaultUi_();
+    wireKeyboardAwareSearch_();
+    showPage_(currentPage);
+    refresh({ mode: 'percent' });
   }
-  cacheDefaultUi_();
-  wireKeyboardAwareSearch_();
-  showPage_(currentPage);
-  refresh({ mode: 'percent' });
+  showLaunchPin_();
 </script>

@@ -7,7 +7,7 @@
   <title>TIN PLATE — INVENT</title>
   <?!= include('Styles') ?>
 </head>
-<body>
+<body class="launchLocked">
   <header>
     <h1>
       <span class="headerTitle">
@@ -22,7 +22,6 @@
         <button class="pageTabBtn active" data-page="inventory" onclick="showPage_('inventory')" data-btn-key="page-inventory" data-btn-rename="1">INVENTORY</button>
         <button class="pageTabBtn" data-page="ordering" onclick="showPage_('ordering')" data-btn-key="page-ordering" data-btn-rename="1">ORDERING</button>
         <button class="pageTabBtn" data-page="settings" onclick="showPage_('settings')" data-btn-key="page-settings" data-btn-rename="1">SETTINGS</button>
-        <button id="toggleLayoutEditBtn" class="orderGuidesBtn danger" onclick="toggleLayoutEditMode_()" data-btn-key="settings-layout" data-btn-rename="1">EDIT LAYOUT</button>
       </div>
       <div class="rightControls">
         <div class="headerFieldGroup">
@@ -75,6 +74,10 @@
       <div id="status" class="status"></div>
     </div>
     <div class="bottomBar">
+      <div class="bottomAdjustControls" aria-label="Adjust selected inventory field">
+        <button id="decreaseSelectedFieldBtn" type="button" class="smallBtn bottomAdjustBtn" onclick="adjustSelectedItemField_(-1)" title="Decrease selected field by 1" aria-label="Decrease selected field by 1" data-btn-key="field-decrease" data-btn-rename="0" disabled>&minus;</button>
+        <button id="increaseSelectedFieldBtn" type="button" class="smallBtn bottomAdjustBtn" onclick="adjustSelectedItemField_(1)" title="Increase selected field by 1" aria-label="Increase selected field by 1" data-btn-key="field-increase" data-btn-rename="0" disabled>+</button>
+      </div>
       <input id="q" type="text" placeholder="Search item name..." oninput="scheduleFilter_()" />
       <button class="smallBtn" style="min-width:120px;" onclick="clearSearch()" data-btn-key="search-clear" data-btn-rename="1">CLEAR</button>
     </div>
@@ -103,6 +106,23 @@
       </div>
     </div>
   </div>
+  <!-- LAUNCH PIN GATE -->
+  <div id="launchPinOverlay" class="overlay launchPinOverlay" role="dialog" aria-modal="true" aria-labelledby="launchPinTitle">
+    <div class="modal launchPinModal">
+      <div class="modalTitle">
+        <span id="launchPinTitle">APP ACCESS</span>
+      </div>
+      <div class="help" style="margin-top:0;">Enter the PIN to launch the beverage management portal.</div>
+      <div class="cell" style="margin-top:10px;">
+        <div class="label" style="justify-content:flex-start; text-align:left;">PIN</div>
+        <input id="launchPinInput" type="password" inputmode="numeric" autocomplete="one-time-code" onkeydown="if(event.key==='Enter'){event.preventDefault();event.stopPropagation();confirmLaunchPin_();}" />
+      </div>
+      <div id="launchPinError" class="launchPinError" role="alert" aria-live="assertive"></div>
+      <div class="actions">
+        <button id="launchPinSubmitBtn" class="primary" onclick="confirmLaunchPin_()" data-btn-key="launch-pin-submit" data-btn-rename="0">Unlock</button>
+      </div>
+    </div>
+  </div>
   <!-- LOADING OVERLAY -->
   <div id="loadingOverlay" class="overlay loadingOverlay" aria-live="polite" aria-busy="true">
     <div class="loadingCard" role="status">
@@ -120,7 +140,7 @@
     </div>
   </div>
   <!-- ORDER GUIDES MODAL -->
-  <div id="orderGuidesOverlay" class="overlay" onclick="orderGuidesOverlayClick(event)">
+  <div id="orderGuidesOverlay" class="overlay">
     <div class="modal orderGuidesModal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>ORDER GUIDES</span>
@@ -143,7 +163,7 @@
     </div>
   </div>
   <!-- INVENTORY COLUMNS MODAL -->
-  <div id="inventoryColumnsOverlay" class="overlay" onclick="inventoryColumnsOverlayClick(event)">
+  <div id="inventoryColumnsOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>AREA FILTER</span>
@@ -160,7 +180,7 @@
     </div>
   </div>
   <!-- SETTINGS MODAL -->
-  <div id="settingsOverlay" class="overlay" onclick="settingsOverlayClick(event)">
+  <div id="settingsOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>SETTINGS</span>
@@ -170,6 +190,7 @@
         <button class="primary" onclick="openCustomizeModal()" data-btn-key="settings-customize" data-btn-rename="1">Customize</button>
         <button class="primary" onclick="openDistributorsModal()" data-btn-key="settings-distributors" data-btn-rename="1">Distributors</button>
         <button class="primary" onclick="openManageDistributorsModal()" data-btn-key="settings-manage-distributors" data-btn-rename="1">Manage Distributors</button>
+        <button class="primary" onclick="openBatchRecipesModal()" data-btn-key="settings-batch-recipes" data-btn-rename="1">Cocktail Batch Recipes</button>
         <button id="toggleHideDisabledInputsBtn" class="danger" onclick="toggleHideDisabledInputs_()" data-btn-key="settings-hide-disabled" data-btn-rename="1">Hide Disabled Inputs</button>
         <button class="danger" onclick="settingsEraseData()" data-btn-key="settings-erase" data-btn-rename="1">Erase Data</button>
         <button class="danger" onclick="openDeleteSectionsModal()" data-btn-key="settings-delete-sections" data-btn-rename="1">Delete Sections</button>
@@ -179,8 +200,61 @@
       </div>
     </div>
   </div>
+  <!-- COCKTAIL BATCH RECIPES MODAL -->
+  <div id="batchRecipesOverlay" class="overlay">
+    <div class="modal batchRecipesModal" onclick="event.stopPropagation()">
+      <div class="modalTitle">
+        <span>COCKTAIL BATCH RECIPES</span>
+        <button class="modalClose" onclick="closeBatchRecipesModal()" data-btn-key="batch-recipes-close" data-btn-rename="1">Close</button>
+      </div>
+      <div id="batchRecipeManagerView">
+        <div class="help" style="margin-top:0;">Recipes render as collapsible sections inside the selected group. Count prepared batch bottles from the recipe section header.</div>
+        <div id="batchRecipeList" class="batchRecipeList"></div>
+        <div class="actions">
+          <button class="primary" onclick="openBatchRecipeEditor_('')" data-btn-key="batch-recipe-add" data-btn-rename="1">Add Batch Recipe</button>
+        </div>
+      </div>
+      <div id="batchRecipeEditorView" style="display:none;">
+        <div class="addGrid batchRecipeBasics">
+          <div class="cell">
+            <div class="label" style="justify-content:flex-start; text-align:left;">Recipe Name</div>
+            <input id="batchRecipeName" type="text" />
+          </div>
+          <div class="cell">
+            <div class="label" style="justify-content:flex-start; text-align:left;">Parent Group</div>
+            <select id="batchRecipeGroup"></select>
+          </div>
+          <div class="cell">
+            <div class="label" style="justify-content:flex-start; text-align:left;">Full Batch Yield</div>
+            <div class="volumeField"><input id="batchRecipeYieldAmount" type="number" min="0" step="0.01" inputmode="decimal" /><select id="batchRecipeYieldUnit"><option value="ML">mL</option><option value="FL OZ">fl oz</option></select></div>
+          </div>
+          <div class="cell">
+            <div class="label" style="justify-content:flex-start; text-align:left;">Batch Bottle Size</div>
+            <div class="volumeField"><input id="batchRecipeBottleSizeAmount" type="number" min="0" step="0.01" inputmode="decimal" /><select id="batchRecipeBottleSizeUnit"><option value="ML">mL</option><option value="FL OZ">fl oz</option></select></div>
+          </div>
+          <div class="cell">
+            <div class="label" style="justify-content:flex-start; text-align:left;">Current Batch Bottle Count</div>
+            <input id="batchRecipeBottleCount" type="number" min="0" step="0.1" inputmode="decimal" value="0" />
+          </div>
+        </div>
+        <div class="customizeSection">
+          <div class="customizeSectionTitle">Batch Ingredients</div>
+          <div class="help" style="margin-top:0;">Link liquor to inventory for bottle-count calculations, or add a recipe-only syrup, mixer, or other ingredient. Recipe-only ingredients require only a name and recipe volume and are not added to beverage inventory.</div>
+          <div id="batchIngredientList" class="batchIngredientList"></div>
+          <div class="actions">
+            <button type="button" onclick="addBatchIngredientRow_()" data-btn-key="batch-ingredient-add" data-btn-rename="1">Add Ingredient</button>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="deleteBatchRecipeBtn" class="danger" onclick="deleteBatchRecipe_()" data-btn-key="batch-recipe-delete" data-btn-rename="1">Delete</button>
+          <button class="primary" onclick="saveBatchRecipe_()" data-btn-key="batch-recipe-save" data-btn-rename="1">Save Recipe</button>
+          <button onclick="showBatchRecipeManager_()" data-btn-key="batch-recipe-cancel" data-btn-rename="1">Back</button>
+        </div>
+      </div>
+    </div>
+  </div>
   <!-- DISTRIBUTORS MODAL -->
-  <div id="distributorsOverlay" class="overlay" onclick="distributorsOverlayClick(event)">
+  <div id="distributorsOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>DISTRIBUTORS</span>
@@ -191,7 +265,7 @@
     </div>
   </div>
   <!-- MANAGE DISTRIBUTORS MODAL -->
-  <div id="manageDistributorsOverlay" class="overlay" onclick="manageDistributorsOverlayClick(event)">
+  <div id="manageDistributorsOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>MANAGE DISTRIBUTORS</span>
@@ -273,7 +347,7 @@
     </div>
   </div>
   <!-- SETTINGS PIN MODAL -->
-  <div id="settingsPinOverlay" class="overlay" onclick="settingsPinOverlayClick(event)">
+  <div id="settingsPinOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>SETTINGS PIN</span>
@@ -285,14 +359,14 @@
         <input id="settingsPinInput" type="password" inputmode="numeric" autocomplete="one-time-code" />
       </div>
       <div class="actions">
-        <button class="primary" onclick="confirmSettingsPin_()" data-btn-key="settings-pin-submit" data-btn-rename="1">Unlock</button>
+        <button id="settingsPinSubmitBtn" class="primary" onclick="confirmSettingsPin_()" data-btn-key="settings-pin-submit" data-btn-rename="1">Unlock</button>
         <button onclick="closeSettingsPinModal()" data-btn-key="settings-pin-cancel" data-btn-rename="1">Cancel</button>
       </div>
     </div>
   </div>
   <input id="settingsImportFile" type="file" accept="application/json" style="display:none;" />
   <!-- CUSTOMIZE MODAL -->
-  <div id="customizeOverlay" class="overlay" onclick="customizeOverlayClick(event)">
+  <div id="customizeOverlay" class="overlay">
     <div class="modal customizeModal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>CUSTOMIZE</span>
@@ -405,7 +479,7 @@
     </div>
   </div>
   <!-- CLEAR FIELDS MODAL -->
-  <div id="clearOverlay" class="overlay" onclick="clearOverlayClick(event)">
+  <div id="clearOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>CLEAR FIELDS</span>
@@ -420,7 +494,7 @@
     </div>
   </div>
   <!-- DELETE SECTIONS MODAL -->
-  <div id="deleteSectionsOverlay" class="overlay" onclick="deleteSectionsOverlayClick(event)">
+  <div id="deleteSectionsOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>DELETE SECTIONS</span>
@@ -435,7 +509,7 @@
     </div>
   </div>
   <!-- EDIT SECTION MODAL -->
-  <div id="sectionEditOverlay" class="overlay" onclick="sectionEditOverlayClick(event)">
+  <div id="sectionEditOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>EDIT SECTION</span>
@@ -513,7 +587,7 @@
     </div>
   </div>
   <!-- SHORTCUT ITEMS MODAL -->
-  <div id="shortcutOverlay" class="overlay" onclick="shortcutOverlayClick(event)">
+  <div id="shortcutOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>SHORTCUT ITEMS</span>
@@ -532,7 +606,7 @@
     </div>
   </div>
   <!-- EDIT GROUP MODAL -->
-  <div id="groupEditOverlay" class="overlay" onclick="groupEditOverlayClick(event)">
+  <div id="groupEditOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>EDIT GROUP</span>
@@ -597,7 +671,7 @@
     </div>
   </div>
   <!-- PRINT MODAL -->
-  <div id="printOverlay" class="overlay" onclick="printOverlayClick(event)">
+  <div id="printOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>PRINT</span>
@@ -630,7 +704,7 @@
     </div>
   </div>
   <!-- EMAIL MODAL -->
-  <div id="emailOverlay" class="overlay" onclick="emailOverlayClick(event)">
+  <div id="emailOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>EMAIL</span>
@@ -674,7 +748,7 @@
     </div>
   </div>
   <!-- EDIT ITEM MODAL -->
-  <div id="editOverlay" class="overlay" onclick="editOverlayClick(event)">
+  <div id="editOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>EDIT ITEM</span>
@@ -704,8 +778,8 @@
             <input id="editOrder" type="text" />
           </div>
           <div class="cell">
-            <div class="label" style="justify-content:flex-start; text-align:left;">BOTTLE SIZE (Column D)</div>
-            <input id="editSize" type="text" />
+            <div class="label" style="justify-content:flex-start; text-align:left;">BOTTLE SIZE WITH UNIT (Column D)</div>
+            <input id="editSize" type="text" placeholder="750 ML or 25.4 FL OZ" />
           </div>
           <div class="cell">
             <div class="label" style="justify-content:flex-start; text-align:left;">PAR (Column E)</div>
@@ -750,29 +824,15 @@
       </div>
       <div class="actions">
         <button class="success" id="editDuplicateBtn" type="button" data-btn-key="item-duplicate" data-btn-rename="1">Duplicate</button>
-        <button class="danger" id="editDeleteBtn" type="button" data-btn-key="item-delete" data-btn-rename="1">Delete</button>
+        <button id="editArchiveBtn" type="button" data-btn-key="item-archive" data-btn-rename="1">Archive</button>
+        <button class="danger" id="editDeleteBtn" type="button" data-btn-key="item-delete" data-btn-rename="0">REMOVE</button>
         <button class="primary" onclick="saveEditModal()" data-btn-key="item-save" data-btn-rename="1">Save</button>
         <button onclick="closeEditModal()" data-btn-key="item-cancel" data-btn-rename="1">Cancel</button>
       </div>
     </div>
   </div>
-  <!-- DELETE ITEM SCOPE MODAL -->
-  <div id="deleteItemScopeOverlay" class="overlay" onclick="deleteItemScopeOverlayClick(event)">
-    <div class="modal" onclick="event.stopPropagation()">
-      <div class="modalTitle">
-        <span>DELETE ITEM</span>
-        <button class="modalClose" onclick="closeDeleteItemScopeModal_()" data-btn-key="delete-item-scope-close" data-btn-rename="1">Close</button>
-      </div>
-      <div class="help" id="deleteItemScopeInfo" style="margin-top:0;"></div>
-      <div class="actions" style="flex-direction:column; align-items:stretch; gap:8px; margin-top:12px;">
-        <button class="primary" onclick="confirmDeleteItemScope_('current')" data-btn-key="delete-item-scope-current" data-btn-rename="1">Remove from this group only</button>
-        <button class="danger" onclick="confirmDeleteItemScope_('allButDynamic')" data-btn-key="delete-item-scope-all" data-btn-rename="1">Remove from all but BY DISTRIBUTOR &amp; BY BEVERAGE</button>
-        <button onclick="closeDeleteItemScopeModal_()" data-btn-key="delete-item-scope-cancel" data-btn-rename="1">Cancel</button>
-      </div>
-    </div>
-  </div>
   <!-- ADD ITEM MODAL -->
-  <div id="addOverlay" class="overlay" onclick="addOverlayClick(event)">
+  <div id="addOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>ADD NEW INVENTORY ITEM</span>
@@ -801,8 +861,8 @@
             <input id="newOrder" type="text" />
           </div>
           <div class="cell">
-            <div class="label" style="justify-content:flex-start; text-align:left;">BOTTLE SIZE (Column D)</div>
-            <input id="newSize" type="text" />
+            <div class="label" style="justify-content:flex-start; text-align:left;">BOTTLE SIZE WITH UNIT (Column D)</div>
+            <input id="newSize" type="text" placeholder="750 ML or 25.4 FL OZ" />
           </div>
           <div class="cell">
             <div class="label" style="justify-content:flex-start; text-align:left;">PAR (Column E)</div>
@@ -833,7 +893,7 @@
     </div>
   </div>
   <!-- ADD MENU MODAL -->
-  <div id="addMenuOverlay" class="overlay" onclick="addMenuOverlayClick(event)">
+  <div id="addMenuOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>ADD</span>
@@ -843,12 +903,13 @@
         <button class="primary" onclick="openAddItemFromMenu_()" data-btn-key="add-menu-item" data-btn-rename="1">ADD ITEM</button>
         <button class="primary" onclick="openAddSectionModal()" data-btn-key="add-menu-section" data-btn-rename="1">ADD SECTION</button>
         <button class="primary" onclick="openAddGroupModal()" data-btn-key="add-menu-group" data-btn-rename="1">ADD GROUP</button>
+        <button class="primary" onclick="openBatchRecipesFromAddMenu_()" data-btn-key="add-menu-batch-recipe" data-btn-rename="1">ADD BATCH RECIPE</button>
         <button class="primary" onclick="openAddDistributorModal()" data-btn-key="add-menu-distributor" data-btn-rename="1">ADD DISTRIBUTOR</button>
       </div>
     </div>
   </div>
   <!-- ADD SECTION MODAL -->
-  <div id="addSectionOverlay" class="overlay" onclick="addSectionOverlayClick(event)">
+  <div id="addSectionOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>ADD SECTION</span>
@@ -921,7 +982,7 @@
     </div>
   </div>
   <!-- ADD GROUP MODAL -->
-  <div id="addGroupOverlay" class="overlay" onclick="addGroupOverlayClick(event)">
+  <div id="addGroupOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>ADD GROUP</span>
@@ -967,7 +1028,7 @@
     </div>
   </div>
   <!-- GROUP TYPE MODAL -->
-  <div id="groupTypeOverlay" class="overlay" onclick="groupTypeOverlayClick(event)">
+  <div id="groupTypeOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>GROUP SETTINGS</span>
@@ -993,7 +1054,7 @@
     </div>
   </div>
   <!-- BY BEVERAGE MODAL -->
-  <div id="typeGroupOverlay" class="overlay" onclick="typeGroupOverlayClick(event)">
+  <div id="typeGroupOverlay" class="overlay">
     <div class="modal customizeModal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>BY BEVERAGE SETTINGS</span>
@@ -1015,7 +1076,7 @@
     </div>
   </div>
   <!-- ADD DISTRIBUTOR MODAL -->
-  <div id="addDistributorOverlay" class="overlay" onclick="addDistributorOverlayClick(event)">
+  <div id="addDistributorOverlay" class="overlay">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalTitle">
         <span>ADD DISTRIBUTOR</span>
@@ -1097,6 +1158,15 @@
       </div>
     </div>
   </div>
+  <!-- SEARCH RESULTS PALETTE (Layout Edit mode) -->
+  <div id="searchResultsPalette" class="searchPalette" style="display:none;">
+    <div class="searchPaletteHead">
+      <span>SEARCH RESULTS</span>
+      <button type="button" class="searchPaletteClose" onclick="closeSearchPalette_(true)" aria-label="Close">×</button>
+    </div>
+    <div class="searchPaletteHelp">Drag an item onto a section to add it there.</div>
+    <div id="searchPaletteList" class="searchPaletteList"></div>
+  </div>
   <?!= include('JavaScript') ?>
 </body>
-</html
+</html>

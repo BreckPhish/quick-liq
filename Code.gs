@@ -82,7 +82,11 @@ const CONFIG = {
   SECTION_LABELS_PROP: 'SECTION_LABEL_OVERRIDES',
   UI_SETTINGS_SHEET: '_APP_SETTINGS',
   SECTION_GROUPS_SHEET: 'SECTION GROUPS',
+  BATCH_RECIPES_SHEET: 'BATCH RECIPES',
+  BATCH_TOTALS_SHEET: '_BATCH_TOTALS',
   DISTRO_DATA_SHEET: 'DISTRO DATA',
+
+  ORDER_GUIDE_BAR_COL: 6,
 
   LOCKED_BG: '#2f2f2f',
   UNLOCKED_BG: '#ffffff',
@@ -738,6 +742,363 @@ function saveSectionGroups_(groups) {
   return { ok: true };
 }
 
+function getBatchRecipesSheet_() {
+  const ss = getSpreadsheet_();
+  let sheet = ss.getSheetByName(CONFIG.BATCH_RECIPES_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(CONFIG.BATCH_RECIPES_SHEET);
+    sheet.getRange(1, 1, 1, 2).setValues([['KEY', 'VALUE']]);
+    sheet.getRange(2, 1).setValue('BATCH_RECIPES_JSON');
+    sheet.hideSheet();
+  }
+  return sheet;
+}
+
+function getBatchRecipes_() {
+  const sheet = getBatchRecipesSheet_();
+  const lastRow = Math.max(sheet.getLastRow(), 2);
+  const rows = sheet.getRange(1, 1, lastRow, 2).getValues();
+  const row = rows.find(r => String(r[0] || '').trim() === 'BATCH_RECIPES_JSON');
+  if (!row || !row[1]) return [];
+  try {
+    const data = JSON.parse(String(row[1]));
+    return Array.isArray(data) ? data : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveBatchRecipes_(recipes) {
+  const sheet = getBatchRecipesSheet_();
+  const json = JSON.stringify(Array.isArray(recipes) ? recipes : []);
+  const lastRow = Math.max(sheet.getLastRow(), 2);
+  const rows = sheet.getRange(1, 1, lastRow, 2).getValues();
+  let idx = rows.findIndex(r => String(r[0] || '').trim() === 'BATCH_RECIPES_JSON');
+  if (idx === -1) {
+    idx = rows.length;
+    sheet.getRange(idx + 1, 1).setValue('BATCH_RECIPES_JSON');
+  }
+  sheet.getRange(idx + 1, 2).setValue(json);
+  return { ok: true };
+}
+
+function verifyLaunchPin(pin) {
+  return String(pin || '').trim() === '1968';
+}
+
+function verifySettingsPin(pin) {
+  const value = String(pin || '').trim();
+  return value === '1968' || value === '1415';
+}
+
+function updateBatchRecipesForGroupRename_(oldKey, newKey) {
+  const oldNorm = norm_(oldKey || '');
+  const nextKey = normalizeGroupKey_(newKey || '');
+  if (!oldNorm || !nextKey || oldNorm === norm_(nextKey)) return;
+  const recipes = getBatchRecipes_();
+  let changed = false;
+  const next = recipes.map(recipe => {
+    if (norm_(recipe?.groupKey || '') !== oldNorm) return recipe;
+    changed = true;
+    return Object.assign({}, recipe, { groupKey: nextKey });
+  });
+  if (changed) saveBatchRecipes_(next);
+}
+
+function normalizeVolumeUnit_(unit) {
+  const raw = String(unit || '').trim().toUpperCase().replace(/[.]/g, '').replace(/\s+/g, ' ');
+  if (raw === 'ML' || raw === 'MILLILITER' || raw === 'MILLILITERS') return 'ML';
+  if (raw === 'L' || raw === 'LITER' || raw === 'LITERS' || raw === 'LITRE' || raw === 'LITRES') return 'L';
+  if (raw === 'FL OZ' || raw === 'FLOZ' || raw === 'FLUID OUNCE' || raw === 'FLUID OUNCES' || raw === 'OZ') return 'FL OZ';
+  return '';
+}
+
+function volumeToMl_(amount, unit) {
+  const value = Number(amount);
+  if (!Number.isFinite(value) || value <= 0) return NaN;
+  const normalized = normalizeVolumeUnit_(unit);
+  if (normalized === 'ML') return value;
+  if (normalized === 'L') return value * 1000;
+  if (normalized === 'FL OZ') return value * 29.5735295625;
+  return NaN;
+}
+
+function parseBottleSizeMl_(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return NaN;
+  const match = value.match(/^\s*(\d+(?:\.\d+)?)\s*(ML|MILLILITERS?|LIT(?:ER|RE)S?|L|FL\.?\s*OZ\.?|FLOZ|FLUID\s+OUNCES?|OZ)\s*$/i);
+  if (!match) return NaN;
+  return volumeToMl_(match[1], match[2]);
+}
+
+function getInventoryItemVolumeMap_() {
+  const ss = getSpreadsheet_();
+  const sheet = ss.getSheetByName(CONFIG.INVENT_SHEET);
+  if (!sheet) throw new Error(`Missing sheet: ${CONFIG.INVENT_SHEET}`);
+  const lastRow = sheet.getLastRow();
+  const map = new Map();
+  if (lastRow < 1) return map;
+  const width = Math.max(CONFIG.COL.ID, CONFIG.COL.BOTTLE_SIZE);
+  const values = sheet.getRange(1, 1, lastRow, width).getDisplayValues();
+  values.forEach(row => {
+    const id = String(row[CONFIG.COL.ID - 1] || '').trim();
+    const name = String(row[CONFIG.COL.COMMON_NAME - 1] || '').trim();
+    if (!id || !name) return;
+    const bottleSize = String(row[CONFIG.COL.BOTTLE_SIZE - 1] || '').trim();
+    map.set(id, { id, name, bottleSize, bottleSizeMl: parseBottleSizeMl_(bottleSize) });
+  });
+  return map;
+}
+
+function getBatchRecipeItemIds_(recipes) {
+  const ids = new Set();
+  (recipes || []).forEach(recipe => {
+    (Array.isArray(recipe?.ingredients) ? recipe.ingredients : []).forEach(ingredient => {
+      const id = String(ingredient?.itemId || '').trim();
+      if (id) ids.add(id);
+    });
+  });
+  return ids;
+}
+
+function calculateBatchContributions_(recipes, itemMap) {
+  const inventory = itemMap || getInventoryItemVolumeMap_();
+  const totals = {};
+  (recipes || []).forEach(recipe => {
+    const bottleCount = Number(recipe?.bottleCount) || 0;
+    const yieldMl = volumeToMl_(recipe?.yieldAmount, recipe?.yieldUnit);
+    const batchBottleMl = volumeToMl_(recipe?.bottleSizeAmount, recipe?.bottleSizeUnit);
+    if (bottleCount <= 0 || !Number.isFinite(yieldMl) || !Number.isFinite(batchBottleMl)) return;
+    const recipeFraction = (bottleCount * batchBottleMl) / yieldMl;
+    (Array.isArray(recipe?.ingredients) ? recipe.ingredients : []).forEach(ingredient => {
+      const id = String(ingredient?.itemId || '').trim();
+      const item = inventory.get(id);
+      const ingredientMl = volumeToMl_(ingredient?.amount, ingredient?.unit);
+      if (!id || !item || !Number.isFinite(item.bottleSizeMl) || !Number.isFinite(ingredientMl)) return;
+      const bottles = (recipeFraction * ingredientMl) / item.bottleSizeMl;
+      totals[id] = (totals[id] || 0) + bottles;
+    });
+  });
+  Object.keys(totals).forEach(id => { totals[id] = Math.round(totals[id] * 1000000) / 1000000; });
+  return totals;
+}
+
+function getBatchTotalsSheet_() {
+  const ss = getSpreadsheet_();
+  let sheet = ss.getSheetByName(CONFIG.BATCH_TOTALS_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(CONFIG.BATCH_TOTALS_SHEET);
+    sheet.hideSheet();
+  }
+  return sheet;
+}
+
+function writeBatchTotalsSheet_(totals) {
+  const sheet = getBatchTotalsSheet_();
+  sheet.clearContents();
+  const rows = [['ITEM_ID', 'BATCH_BOTTLES']];
+  Object.keys(totals || {}).sort().forEach(id => rows.push([String(id), Number(totals[id]) || 0]));
+  sheet.getRange(1, 1, rows.length, 2).setValues(rows);
+  sheet.getRange('B:B').setNumberFormat('0.0');
+  if (!sheet.isSheetHidden()) sheet.hideSheet();
+}
+
+function ensureOrderGuideBatchFormula_(sheet, row) {
+  if (!sheet || !row) return;
+  const cell = sheet.getRange(row, CONFIG.ORDER_GUIDE_BAR_COL);
+  const currentFormula = String(cell.getFormula() || '').trim();
+  if (currentFormula.includes(`'${CONFIG.BATCH_TOTALS_SHEET}'`)) return;
+  const display = String(cell.getDisplayValue() || '').trim();
+  let baseExpression = '""';
+  if (currentFormula) {
+    baseExpression = currentFormula.replace(/^=/, '');
+  } else if (display && Number.isFinite(Number(display))) {
+    baseExpression = String(Number(display));
+  }
+  const lookup = `IFNA(VLOOKUP($A${row},'${CONFIG.BATCH_TOTALS_SHEET}'!$A:$B,2,FALSE),0)`;
+  cell.setFormula(`=LET(qlBase,IFERROR(${baseExpression},""),qlBatch,${lookup},IF(AND(qlBase="",qlBatch=0),"",IFERROR(VALUE(qlBase),0)+qlBatch))`);
+  cell.setNumberFormat('0.0');
+}
+
+function syncBatchTotalsAndOrderGuides_(affectedIds) {
+  const recipes = getBatchRecipes_();
+  const totals = calculateBatchContributions_(recipes);
+  writeBatchTotalsSheet_(totals);
+  const ids = new Set(Array.isArray(affectedIds) ? affectedIds.map(String) : []);
+  Object.keys(totals).forEach(id => ids.add(String(id)));
+  const ss = getSpreadsheet_();
+  const tables = getOrderingTableDefs_(getDistributorsFromSettings_(getUiSettings_()));
+  const tablesCache = new Map();
+  tables.forEach(def => {
+    if (!def?.sheet || (!def.tableId && !def.a1)) return;
+    const sheet = ss.getSheetByName(def.sheet);
+    if (!sheet) return;
+    const loc = getTableRangeByIdOrFallback_(sheet, def.tableId, def.a1, tablesCache);
+    const range = loc.range;
+    if (!range) return;
+    const startRow = range.getRow();
+    const idValues = sheet.getRange(startRow, 1, range.getNumRows(), 1).getDisplayValues();
+    idValues.forEach((row, index) => {
+      if (ids.has(String(row[0] || '').trim())) ensureOrderGuideBatchFormula_(sheet, startRow + index);
+    });
+  });
+  SpreadsheetApp.flush();
+  return totals;
+}
+
+function validateBatchRecipe_(payload, existingRecipes) {
+  const recipe = payload && typeof payload === 'object' ? payload : {};
+  const id = String(recipe.id || '').trim();
+  const name = String(recipe.name || '').trim();
+  const groupKey = normalizeGroupKey_(String(recipe.groupKey || '').trim());
+  const yieldAmount = Number(recipe.yieldAmount);
+  const yieldUnit = normalizeVolumeUnit_(recipe.yieldUnit);
+  const bottleSizeAmount = Number(recipe.bottleSizeAmount);
+  const bottleSizeUnit = normalizeVolumeUnit_(recipe.bottleSizeUnit);
+  const bottleCount = Number(recipe.bottleCount || 0);
+  if (!name) return { ok: false, message: 'Recipe name is required.' };
+  if (!groupKey) return { ok: false, message: 'A parent group is required.' };
+  if (!getSectionGroups_().some(group => normalizeGroupKey_(group.key || group.name || '') === groupKey)) {
+    return { ok: false, message: 'The selected parent group no longer exists.' };
+  }
+  if (!Number.isFinite(yieldAmount) || yieldAmount <= 0 || !['ML', 'FL OZ'].includes(yieldUnit)) return { ok: false, message: 'Full batch yield and unit are required.' };
+  if (!Number.isFinite(bottleSizeAmount) || bottleSizeAmount <= 0 || !['ML', 'FL OZ'].includes(bottleSizeUnit)) return { ok: false, message: 'Batch bottle size and unit are required.' };
+  if (!Number.isFinite(bottleCount) || bottleCount < 0) return { ok: false, message: 'Bottle count must be zero or greater.' };
+  const duplicate = (existingRecipes || []).find(other => String(other?.id || '') !== id && norm_(other?.name || '') === norm_(name));
+  if (duplicate) return { ok: false, message: 'A batch recipe with that name already exists.' };
+  const inventory = getInventoryItemVolumeMap_();
+  const archivedIds = getArchivedItemIds_();
+  const rawIngredients = Array.isArray(recipe.ingredients) ? recipe.ingredients : [];
+  if (!rawIngredients.length) return { ok: false, message: 'Add at least one ingredient.' };
+  const seen = new Set();
+  const ingredients = [];
+  for (const raw of rawIngredients) {
+    const itemId = String(raw?.itemId || '').trim();
+    const kind = String(raw?.kind || '').trim().toLowerCase() === 'custom' || (!itemId && String(raw?.name || '').trim())
+      ? 'custom'
+      : 'inventory';
+    const amount = Number(raw?.amount);
+    const unit = normalizeVolumeUnit_(raw?.unit);
+    if (kind === 'custom') {
+      const customName = String(raw?.name || '').trim();
+      const customKey = `custom:${norm_(customName)}`;
+      const cost = String(raw?.cost || '').trim();
+      if (!customName) return { ok: false, message: 'Recipe-only ingredients require an ingredient name.' };
+      if (seen.has(customKey)) return { ok: false, message: `${customName} is listed more than once.` };
+      if (!Number.isFinite(amount) || amount <= 0 || !['ML', 'FL OZ'].includes(unit)) {
+        return { ok: false, message: `Enter a valid amount and unit for ${customName}.` };
+      }
+      if (cost && !/^\$?\d+(\.\d{1,2})?$/.test(cost)) {
+        return { ok: false, message: `Cost for ${customName} must be a valid dollar amount.` };
+      }
+      seen.add(customKey);
+      ingredients.push({
+        kind: 'custom',
+        name: customName,
+        amount,
+        unit,
+        vendor: String(raw?.vendor || '').trim(),
+        categoryN: String(raw?.categoryN || '').trim(),
+        orderName: String(raw?.orderName || '').trim(),
+        packageSize: String(raw?.packageSize || '').trim(),
+        par: String(raw?.par || '').trim(),
+        cost,
+        csSize: String(raw?.csSize || '').trim(),
+        notes: String(raw?.notes || '').trim()
+      });
+      continue;
+    }
+    const item = inventory.get(itemId);
+    if (!item) return { ok: false, message: `Inventory item ${itemId || '(blank)'} was not found.` };
+    if (archivedIds.has(itemId)) return { ok: false, message: `${item.name} is archived and cannot be used in a batch recipe.` };
+    const inventoryKey = `inventory:${itemId}`;
+    if (seen.has(inventoryKey)) return { ok: false, message: `${item.name} is listed more than once.` };
+    if (!Number.isFinite(item.bottleSizeMl)) {
+      return { ok: false, message: `${item.name} needs a bottle size such as "750 ML" or "25.4 FL OZ" before it can be used in a batch recipe.` };
+    }
+    if (!Number.isFinite(amount) || amount <= 0 || !['ML', 'FL OZ'].includes(unit)) return { ok: false, message: `Enter a valid amount and unit for ${item.name}.` };
+    seen.add(inventoryKey);
+    ingredients.push({ kind: 'inventory', itemId, amount, unit });
+  }
+  return {
+    ok: true,
+    recipe: {
+      id: id || `batch_${Utilities.getUuid()}`,
+      name,
+      groupKey,
+      yieldAmount,
+      yieldUnit,
+      bottleSizeAmount,
+      bottleSizeUnit,
+      bottleCount: Math.round(bottleCount * 10) / 10,
+      ingredients
+    }
+  };
+}
+
+function saveBatchRecipe(payload) {
+  assertAuthorized_();
+  const lock = getLock_();
+  if (lock) lock.waitLock(CONFIG.LOCK_WAIT_MS);
+  try {
+    const recipes = getBatchRecipes_();
+    const validation = validateBatchRecipe_(payload, recipes);
+    if (!validation.ok) return validation;
+    const nextRecipe = validation.recipe;
+    const oldIds = getBatchRecipeItemIds_(recipes);
+    const index = recipes.findIndex(recipe => String(recipe?.id || '') === nextRecipe.id);
+    if (index >= 0) recipes[index] = nextRecipe;
+    else recipes.push(nextRecipe);
+    saveBatchRecipes_(recipes);
+    const affected = new Set(oldIds);
+    getBatchRecipeItemIds_(recipes).forEach(id => affected.add(id));
+    const totals = syncBatchTotalsAndOrderGuides_(Array.from(affected));
+    return { ok: true, recipe: nextRecipe, recipes, batchContributions: totals };
+  } finally {
+    if (lock) lock.releaseLock();
+  }
+}
+
+function setBatchRecipeBottleCount(payload) {
+  assertAuthorized_();
+  const id = String(payload?.id || '').trim();
+  const bottleCount = Number(payload?.bottleCount);
+  if (!id) return { ok: false, message: 'Recipe id is required.' };
+  if (!Number.isFinite(bottleCount) || bottleCount < 0) return { ok: false, message: 'Bottle count must be zero or greater.' };
+  const lock = getLock_();
+  if (lock) lock.waitLock(CONFIG.LOCK_WAIT_MS);
+  try {
+    const recipes = getBatchRecipes_();
+    const index = recipes.findIndex(recipe => String(recipe?.id || '') === id);
+    if (index < 0) return { ok: false, message: 'Batch recipe not found.' };
+    recipes[index] = Object.assign({}, recipes[index], { bottleCount: Math.round(bottleCount * 10) / 10 });
+    saveBatchRecipes_(recipes);
+    const totals = syncBatchTotalsAndOrderGuides_(Array.from(getBatchRecipeItemIds_(recipes)));
+    return { ok: true, recipe: recipes[index], recipes, batchContributions: totals };
+  } finally {
+    if (lock) lock.releaseLock();
+  }
+}
+
+function deleteBatchRecipe(payload) {
+  assertAuthorized_();
+  const id = String(payload?.id || '').trim();
+  if (!id) return { ok: false, message: 'Recipe id is required.' };
+  const lock = getLock_();
+  if (lock) lock.waitLock(CONFIG.LOCK_WAIT_MS);
+  try {
+    const recipes = getBatchRecipes_();
+    const oldIds = getBatchRecipeItemIds_(recipes);
+    const next = recipes.filter(recipe => String(recipe?.id || '') !== id);
+    if (next.length === recipes.length) return { ok: false, message: 'Batch recipe not found.' };
+    saveBatchRecipes_(next);
+    const totals = syncBatchTotalsAndOrderGuides_(Array.from(oldIds));
+    return { ok: true, recipes: next, batchContributions: totals };
+  } finally {
+    if (lock) lock.releaseLock();
+  }
+}
+
 function normalizeGroupKey_(label) {
   return makeSectionKey_(label);
 }
@@ -1099,7 +1460,9 @@ function autoCreateDistributorEntry_(vendorName, categories, uiSettings, opts) {
 
   let blocks = [];
   if (sheet) {
-    blocks = getTableBlocksFromSheet_(sheet);
+    // getTables() is slow; skip it on hot paths (e.g. read-time seeding) and
+    // rely on the known default ordering blocks instead.
+    if (!options.skipTableScan) blocks = getTableBlocksFromSheet_(sheet);
     if (!blocks.length) blocks = getDefaultOrderingBlocksForSheet_(sheet);
   }
   const tableCount = Math.max(1, Math.min(10, blocks.length || 1));
@@ -1132,7 +1495,8 @@ function autoCreateDistributorEntry_(vendorName, categories, uiSettings, opts) {
   };
 }
 
-function autoSeedDistributorsFromInventory_(uiSettings, vendorMap) {
+function autoSeedDistributorsFromInventory_(uiSettings, vendorMap, opts) {
+  const options = opts && typeof opts === 'object' ? opts : {};
   let list = getDistributorsFromSettings_(uiSettings);
   const existing = new Set();
   list.forEach(d => {
@@ -1141,7 +1505,7 @@ function autoSeedDistributorsFromInventory_(uiSettings, vendorMap) {
   });
   const builtIn = new Set((CONFIG.VENDORS || []).map(v => norm_(v)));
   const added = [];
-  const seedOpts = { createSheet: false };
+  const seedOpts = { createSheet: false, skipTableScan: !!options.skipTableScan };
   (vendorMap || new Map()).forEach(entry => {
     const name = String(entry?.name || '').trim();
     const key = norm_(name);
@@ -1417,6 +1781,7 @@ function exportWebappData() {
   const uiSettings = getUiSettings_();
   const sectionLabels = getSectionLabelOverrides_();
   const sectionGroups = getSectionGroups_();
+  const batchRecipes = getBatchRecipes_();
   const sheetSnapshots = {};
   [CONFIG.INVENT_SHEET, CONFIG.ORDER_SHEET].forEach(name => {
     const target = ss.getSheetByName(name);
@@ -1453,6 +1818,7 @@ function exportWebappData() {
     uiSettings,
     sectionLabels,
     sectionGroups,
+    batchRecipes,
     counts,
     sheets: sheetSnapshots
   };
@@ -1474,6 +1840,9 @@ function importWebappData(payload) {
   }
   if (Array.isArray(data.sectionGroups)) {
     saveSectionGroups_(data.sectionGroups);
+  }
+  if (Array.isArray(data.batchRecipes)) {
+    saveBatchRecipes_(data.batchRecipes);
   }
   if (data.meta && typeof data.meta === 'object') {
     setInventoryMeta(data.meta.lastCompleted || data.meta.date || '', data.meta.initials || '');
@@ -1500,7 +1869,10 @@ function importWebappData(payload) {
       if (!sheet) throw new Error(`Missing sheet: ${CONFIG.INVENT_SHEET}`);
 
       const lastRow = sheet.getLastRow();
-      if (!lastRow) return { ok: true, missingIds: [] };
+      if (!lastRow) {
+        if (Array.isArray(data.batchRecipes)) syncBatchTotalsAndOrderGuides_(Array.from(getBatchRecipeItemIds_(data.batchRecipes)));
+        return { ok: true, missingIds: [] };
+      }
 
       const idCol = sheet.getRange(1, CONFIG.COL.ID, lastRow, 1).getDisplayValues();
       const rowById = new Map();
@@ -1537,9 +1909,11 @@ function importWebappData(payload) {
         updateBg(CONFIG.COL.J, entry.enableJ);
       });
 
+      if (Array.isArray(data.batchRecipes)) syncBatchTotalsAndOrderGuides_(Array.from(getBatchRecipeItemIds_(data.batchRecipes)));
       return { ok: true, missingIds: missing };
     }
 
+    if (Array.isArray(data.batchRecipes)) syncBatchTotalsAndOrderGuides_(Array.from(getBatchRecipeItemIds_(data.batchRecipes)));
     return { ok: true, missingIds: [], snapshotApplied: true };
   } finally {
     if (lock) lock.releaseLock();
@@ -1707,6 +2081,59 @@ function copyFormatBlock_(sheet, exampleRow, newRow, colStart, colEnd) {
 }
 
 /**
+ * ONE-TIME MAINTENANCE — shrink a bloated sheet.
+ *
+ * Google Sheets can accumulate formatting across all 16,384 columns (and
+ * thousands of empty rows), which inflates the file to many MB and makes every
+ * operation — including app load and adding distributors — slow. This deletes
+ * the columns past the real data and the trailing empty rows.
+ *
+ * Run from the Apps Script editor: select `compactInventSheet` and press Run.
+ * It keeps columns A..Z (the data ends well before that) plus a small row
+ * buffer, so it is safe for this app's schema. The return value reports what
+ * was removed. After running, reload the web app — it should be far faster.
+ */
+function compactInventSheet() {
+  const ss = getSpreadsheet_();
+  const sheet = ss.getSheetByName(CONFIG.INVENT_SHEET);
+  if (!sheet) throw new Error(`Missing sheet: ${CONFIG.INVENT_SHEET}`);
+  const res = compactSheet_(sheet, 26, 25);
+  SpreadsheetApp.flush();
+  return res;
+}
+
+/** Deletes columns past keepCols and rows past (lastRow + rowBuffer). */
+function compactSheet_(sheet, keepCols, rowBuffer) {
+  const keep = Math.max(1, Number(keepCols) || 26);
+  const buffer = Math.max(0, Number(rowBuffer) || 0);
+  let removedCols = 0;
+  let removedRows = 0;
+
+  const maxCols = sheet.getMaxColumns();
+  if (maxCols > keep) {
+    sheet.deleteColumns(keep + 1, maxCols - keep);
+    removedCols = maxCols - keep;
+  }
+
+  const lastRow = Math.max(sheet.getLastRow(), 1);
+  const keepRows = lastRow + buffer;
+  const maxRows = sheet.getMaxRows();
+  if (maxRows > keepRows) {
+    sheet.deleteRows(keepRows + 1, maxRows - keepRows);
+    removedRows = maxRows - keepRows;
+  }
+
+  return {
+    ok: true,
+    sheet: sheet.getName(),
+    removedCols,
+    removedRows,
+    columnsNow: sheet.getMaxColumns(),
+    rowsNow: sheet.getMaxRows()
+  };
+}
+
+/**
  * Returns a Set of 1-based row numbers that are hidden-by-user, fetched in a
  * SINGLE Sheets API call. Calling Sheet.isRowHiddenByUser() per row is a
  * backend round-trip each, which made loads take minutes on large sheets.
@@ -1748,6 +2175,7 @@ function getInventData() {
   let distributors = getDistributorsFromSettings_(uiSettings);
   const secondarySections = getSecondarySectionsFromSettings_(uiSettings);
   const sectionGroups = getSectionGroups_();
+  const batchRecipes = getBatchRecipes_();
 
   const lastRow = sheet.getLastRow();
   if (lastRow < 1) {
@@ -1793,15 +2221,28 @@ function getInventData() {
       orderGuideSheets,
       orderGuideSheetNames,
       sectionGroups,
+      batchRecipes,
+      batchContributions: calculateBatchContributions_(batchRecipes),
       lastCompleted: meta.lastCompleted,
       initials: meta.initials
     };
   }
 
+  // Lightweight phase timing — shows up in the Apps Script execution log so we
+  // can see exactly where load time goes.
+  let _t = Date.now();
+  const _mark = (label) => { const now = Date.now(); console.log(`getInventData ${label}: ${now - _t}ms`); _t = now; };
+
   const maxCol = Math.max(CONFIG.COL.NOTES, 18);
   const rng = sheet.getRange(1, 1, lastRow, maxCol);
   const display = rng.getDisplayValues();
-  const bgs = rng.getBackgrounds();
+  _mark('getDisplayValues');
+  // Backgrounds are only needed for the G/H/J lock state — read just those
+  // columns instead of the whole 18-column range (a much smaller, faster read).
+  const bgStartCol = CONFIG.COL.G;
+  const bgWidth = CONFIG.COL.J - CONFIG.COL.G + 1;
+  const bgs = sheet.getRange(1, bgStartCol, lastRow, bgWidth).getBackgrounds();
+  _mark('getBackgrounds');
 
   // Acquire lock for write operations (alias normalization, distributor seeding, distro sync)
   let vendorMap = new Map();
@@ -1810,7 +2251,9 @@ function getInventData() {
   try {
     normalizeVendorAliasesInDisplay_(sheet, display, VENDOR_ALIASES);
     vendorMap = collectVendorCategoriesFromDisplay_(display);
-    const seedRes = autoSeedDistributorsFromInventory_(uiSettings, vendorMap);
+    // skipTableScan avoids the slow getTables() call while seeding placeholder
+    // distributor entries on the read path.
+    const seedRes = autoSeedDistributorsFromInventory_(uiSettings, vendorMap, { skipTableScan: true });
     if (seedRes && seedRes.distributors) distributors = seedRes.distributors;
     distributors = ensureDistributorRefs_(distributors, uiSettings);
     if (shouldSyncDistroData_(uiSettings, distributors)) {
@@ -1819,6 +2262,7 @@ function getInventData() {
   } finally {
     if (dataLock) dataLock.releaseLock();
   }
+  _mark('lock+seed+distroSync');
   const vendorSet = new Set(CONFIG.VENDORS);
   distributors.forEach(d => {
     const name = String(d.name || '').trim();
@@ -1843,6 +2287,7 @@ function getInventData() {
   // Fetch all hidden-by-user rows in one call (falls back to per-row if the
   // Sheets advanced service isn't enabled).
   const hiddenRows = getHiddenRowSet_(ss, sheet.getName());
+  _mark('getHiddenRowSet');
 
   for (let r = 0; r < lastRow; r++) {
     const rowNum = r + 1;
@@ -1867,9 +2312,9 @@ function getInventData() {
       else seen.set(id, true);
 
       const editable = {
-        g: !isDarkLockedBg_(bgs[r][CONFIG.COL.G - 1]),
-        h: !isDarkLockedBg_(bgs[r][CONFIG.COL.H - 1]),
-        j: !isDarkLockedBg_(bgs[r][CONFIG.COL.J - 1])
+        g: !isDarkLockedBg_(bgs[r][CONFIG.COL.G - bgStartCol]),
+        h: !isDarkLockedBg_(bgs[r][CONFIG.COL.H - bgStartCol]),
+        j: !isDarkLockedBg_(bgs[r][CONFIG.COL.J - bgStartCol])
       };
 
       const vendor = String(display[r][CONFIG.COL.VENDOR - 1] || '').trim();
@@ -1902,6 +2347,7 @@ function getInventData() {
       });
     }
   }
+  _mark('rowLoop');
 
   return {
     headers: { g: 'BAR', h: 'OTHER', j: 'OFFICE' },
@@ -1919,6 +2365,8 @@ function getInventData() {
     orderGuideSheets,
     orderGuideSheetNames,
     sectionGroups,
+    batchRecipes,
+    batchContributions: calculateBatchContributions_(batchRecipes),
     lastCompleted: meta.lastCompleted,
     initials: meta.initials
   };
@@ -1939,6 +2387,7 @@ function saveInventEdits(edits) {
     const editList = edits || [];
     // Cache settings/distributors once for all edits
     const cachedDistributors = getDistributorsFromSettings_(getUiSettings_());
+    const batchIngredientIds = getBatchRecipeItemIds_(getBatchRecipes_());
 
     const buildIdMap = () => {
       const idCol = sheet.getRange(1, CONFIG.COL.ID, lastRow, 1).getDisplayValues();
@@ -1958,6 +2407,7 @@ function saveInventEdits(edits) {
 
     const missing = [];
     const ordering = [];
+    let batchTotalsDirty = false;
 
     for (let i = 0; i < editList.length; i++) {
       const e = editList[i] || {};
@@ -2000,7 +2450,14 @@ function saveInventEdits(edits) {
       const has = (prop) => Object.prototype.hasOwnProperty.call(e, prop);
       if (has('commonName')) rowValues[CONFIG.COL.COMMON_NAME - 1] = String(e.commonName || '').trim().toUpperCase();
       if (has('orderName')) rowValues[CONFIG.COL.ORDER_NAME - 1] = String(e.orderName || '').trim().toUpperCase();
-      if (has('bottleSize')) rowValues[CONFIG.COL.BOTTLE_SIZE - 1] = String(e.bottleSize || '').trim();
+      if (has('bottleSize')) {
+        const bottleSize = String(e.bottleSize || '').trim();
+        if (batchIngredientIds.has(id) && !Number.isFinite(parseBottleSizeMl_(bottleSize))) {
+          throw new Error('Items used in batch recipes must keep a bottle size such as "750 ML" or "25.4 FL OZ".');
+        }
+        rowValues[CONFIG.COL.BOTTLE_SIZE - 1] = bottleSize;
+        if (batchIngredientIds.has(id)) batchTotalsDirty = true;
+      }
       if (has('par')) rowValues[CONFIG.COL.PAR - 1] = String(e.par || '').trim();
       if (has('categoryN')) rowValues[CONFIG.COL.CATEGORY - 1] = String(e.categoryN || '').trim();
       if (has('vendor')) rowValues[CONFIG.COL.VENDOR - 1] = String(e.vendor || '').trim();
@@ -2032,8 +2489,11 @@ function saveInventEdits(edits) {
       }
     }
 
-    if (missing.length) return { missingIds: missing, ordering };
-    return { ok: true, ordering };
+    const batchTotals = batchTotalsDirty
+      ? syncBatchTotalsAndOrderGuides_(Array.from(batchIngredientIds))
+      : null;
+    if (missing.length) return { missingIds: missing, ordering, batchContributions: batchTotals };
+    return { ok: true, ordering, batchContributions: batchTotals };
   } finally {
     if (lock) lock.releaseLock();
   }
@@ -2709,10 +3169,24 @@ function resolveOrderingTargetTable_(vendor, categoryN, distributorsOverride) {
   return { ok: true, vendor: vendorKey, categoryKey: catGroup, tableKey };
 }
 
-function getTableRangeByIdOrFallback_(sheet, tableId, fallbackA1) {
+function getTableRangeByIdOrFallback_(sheet, tableId, fallbackA1, tablesCache) {
   try {
-    if (sheet && typeof sheet.getTables === 'function') {
-      const tables = sheet.getTables() || [];
+    // Only consult getTables() (a slow call) when we actually have a native
+    // table id to match. Cache the result per sheet so a single ordering scan
+    // doesn't call getTables() once per table definition.
+    if (tableId != null && tableId !== '' && sheet && typeof sheet.getTables === 'function') {
+      let tables;
+      if (tablesCache) {
+        const cacheKey = sheet.getName();
+        if (tablesCache.has(cacheKey)) {
+          tables = tablesCache.get(cacheKey);
+        } else {
+          tables = sheet.getTables() || [];
+          tablesCache.set(cacheKey, tables);
+        }
+      } else {
+        tables = sheet.getTables() || [];
+      }
       for (const t of tables) {
         try {
           const id = (typeof t.getId === 'function') ? t.getId() : null;
@@ -2765,6 +3239,7 @@ function insertIntoOrderingTableByKey_(tableKey, inventId) {
   src.copyTo(dst, { contentsOnly: false });
 
   sheet.getRange(insertRow, 1).setValue(String(inventId));
+  ensureOrderGuideBatchFormula_(sheet, insertRow);
 
   try {
     if (tableObj && typeof tableObj.setRange === 'function') {
@@ -2816,13 +3291,14 @@ function findOrderingRowsForId_(ss, id) {
 
   const distributors = getDistributorsFromSettings_(getUiSettings_());
   const tables = getOrderingTableDefs_(distributors);
+  const tablesCache = new Map(); // getTables() result per sheet — avoids a slow call per def
   for (const def of tables) {
     if (!def || !def.sheet) continue;
     if (!def.tableId && !def.a1) continue;
     const sheet = ss.getSheetByName(def.sheet);
     if (!sheet) continue;
 
-    const loc = getTableRangeByIdOrFallback_(sheet, def.tableId, def.a1);
+    const loc = getTableRangeByIdOrFallback_(sheet, def.tableId, def.a1, tablesCache);
     const tableRange = loc.range;
     const tableObj = loc.tableObj;
     if (!tableRange) continue;
@@ -2911,6 +3387,14 @@ function syncOrderingForItem_(id, vendor, categoryN, options, distributorsOverri
   if (!idStr) return { ok: false, skipped: true, message: 'Missing ID for ordering sync.' };
 
   const existing = findOrderingRowsForId_(ss, idStr);
+
+  // Archived items must never live in an order guide — strip them and stop,
+  // even if a later vendor/category edit would otherwise re-add them.
+  if (getArchivedItemIds_().has(idStr)) {
+    if (existing.length) removeOrderingRows_(existing);
+    return { ok: true, archivedSkip: true };
+  }
+
   const target = resolveOrderingTargetTable_(vendor, categoryN, distributorsOverride);
   if (!target.ok) {
     if (existing.length) removeOrderingRows_(existing);
@@ -3543,6 +4027,7 @@ function updateSectionGroup(payload) {
   groups.length = 0;
   nextGroups.forEach(g => groups.push(g));
   saveSectionGroups_(groups);
+  updateBatchRecipesForGroupRename_(oldKey, nextKey);
   return { ok: true, group: updated, groups };
 }
 
@@ -3603,6 +4088,10 @@ function deleteSectionGroup(payload) {
   const keyRaw = String(payload?.key || '').trim();
   if (!keyRaw) return { ok: false, message: 'Group key is required.' };
   const groups = getSectionGroups_();
+  const linkedRecipes = getBatchRecipes_().filter(recipe => norm_(recipe?.groupKey || '') === norm_(keyRaw));
+  if (linkedRecipes.length) {
+    return { ok: false, message: `Move or delete batch recipe(s) first: ${linkedRecipes.map(recipe => recipe.name).join(', ')}` };
+  }
   let next = groups.filter(g => norm_(g.key || g.name || '') !== norm_(keyRaw));
   if (next.length === groups.length) return { ok: false, message: 'Group not found.' };
   const keyNorm = norm_(keyRaw);
@@ -4249,6 +4738,52 @@ function addInventItem(payload) {
   }
 }
 
+/** Set of archived item IDs (input disabled in the UI, excluded from order guides). */
+function getArchivedItemIds_() {
+  const ui = getUiSettings_();
+  const list = (ui && Array.isArray(ui.archivedItemIds)) ? ui.archivedItemIds : [];
+  return new Set(list.map(v => String(v || '').trim()).filter(Boolean));
+}
+
+/**
+ * Archive or unarchive an item. Archiving records the ID in settings and removes
+ * the item from its distributor order guide(s); unarchiving clears the flag and
+ * re-adds it to the correct order-guide table (vendor/categoryN supplied by the
+ * client). The item's INVENT row is never touched.
+ */
+function setItemArchived(payload) {
+  const id = String(payload?.id || '').trim();
+  if (!id) return { ok: false, message: 'Item ID is required.' };
+  const archived = !!payload?.archived;
+  if (archived) {
+    const linkedRecipes = getBatchRecipes_().filter(recipe =>
+      (Array.isArray(recipe?.ingredients) ? recipe.ingredients : []).some(ingredient => String(ingredient?.itemId || '').trim() === id));
+    if (linkedRecipes.length) {
+      return { ok: false, message: `Remove this item from batch recipe(s) first: ${linkedRecipes.map(recipe => recipe.name).join(', ')}` };
+    }
+  }
+
+  const uiSettings = getUiSettings_();
+  const set = new Set(
+    (Array.isArray(uiSettings.archivedItemIds) ? uiSettings.archivedItemIds : [])
+      .map(v => String(v || '').trim()).filter(Boolean)
+  );
+  if (archived) set.add(id); else set.delete(id);
+  uiSettings.archivedItemIds = Array.from(set);
+  saveUiSettings(uiSettings);
+
+  const ss = getSpreadsheet_();
+  if (archived) {
+    const rows = findOrderingRowsForId_(ss, id);
+    if (rows.length) removeOrderingRows_(rows);
+    return { ok: true, archived: true, archivedItemIds: uiSettings.archivedItemIds, removedFromOrder: rows.length };
+  }
+  // Unarchive: the ID is already out of the archived set above, so the sync
+  // guard won't block re-adding it to its order-guide table.
+  const sync = syncOrderingForItem_(id, String(payload?.vendor || '').trim(), String(payload?.categoryN || '').trim(), { touch: false });
+  return { ok: true, archived: false, archivedItemIds: uiSettings.archivedItemIds, sync };
+}
+
 function deleteInventItem(payload) {
   assertAuthorized_();
   const ss = getSpreadsheet_();
@@ -4257,11 +4792,20 @@ function deleteInventItem(payload) {
 
   const id = String(payload?.id || '').trim();
   if (!id) throw new Error('Item ID is required.');
+  const sourceSectionKey = String(payload?.sourceSectionKey || '').trim().toUpperCase();
+  if (!sourceSectionKey.startsWith('DISTRO_') && !sourceSectionKey.startsWith('TYPE_')) {
+    return { ok: false, message: 'Permanent deletion is only allowed from BY DISTRIBUTOR or BY BEVERAGE.' };
+  }
 
   const lock = getLock_();
   if (lock) lock.waitLock(CONFIG.LOCK_WAIT_MS);
 
   try {
+    const linkedRecipes = getBatchRecipes_().filter(recipe =>
+      (Array.isArray(recipe?.ingredients) ? recipe.ingredients : []).some(ingredient => String(ingredient?.itemId || '').trim() === id));
+    if (linkedRecipes.length) {
+      throw new Error(`Remove this item from batch recipe(s) first: ${linkedRecipes.map(recipe => recipe.name).join(', ')}`);
+    }
     const lastRow = sheet.getLastRow();
     if (lastRow < 1) return { missingIds: [id] };
 
@@ -4379,7 +4923,16 @@ function deleteInventSections(payload) {
     }
   }
 
-  if (!headers.length) return { ok: false, message: 'No matching sections found.' };
+  // Settings-only sections (secondary / location shortcuts) have no INVENT
+  // header but still need to be deletable. Only bail if nothing at all matches.
+  const settingsForCheck = getUiSettings_();
+  const secondaryForCheck = Array.isArray(settingsForCheck.secondarySections) ? settingsForCheck.secondarySections : [];
+  const secondaryMatched = secondaryForCheck.some(sec =>
+    keySet.has(norm_(sec?.key || sec?.label || sec?.heading || '')) ||
+    labelSet.has(norm_(sec?.label || sec?.heading || '')));
+  if (!headers.length && !secondaryMatched) {
+    return { ok: false, message: 'No matching sections found.' };
+  }
 
   const rowsToDelete = new Set();
   const itemIds = new Set();
@@ -4409,8 +4962,12 @@ function deleteInventSections(payload) {
     if (lock) lock.releaseLock();
   }
 
+  // Include every selected key/label (not just found INVENT headers) so
+  // secondary/location sections get cleaned from settings and groups too.
   const removedKeyNorms = new Set(headers.map(h => norm_(h.key || '')));
   const removedLabelNorms = new Set(headers.map(h => norm_(h.label || '')));
+  keySet.forEach(k => removedKeyNorms.add(k));
+  labelSet.forEach(l => removedLabelNorms.add(l));
 
   const uiSettings = getUiSettings_();
   const nextSettings = uiSettings && typeof uiSettings === 'object' ? uiSettings : {};

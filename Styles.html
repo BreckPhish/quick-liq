@@ -43,6 +43,12 @@
       background:var(--bg);
       color:var(--text);
     }
+    body.launchLocked{
+      overflow:hidden;
+    }
+    body.launchLocked > :not(#launchPinOverlay):not(script){
+      visibility:hidden;
+    }
     header{
       background:linear-gradient(to bottom, rgba(11,18,32,0.98), rgba(11,18,32,0.90));
       border-bottom:1px solid var(--border);
@@ -72,6 +78,85 @@
       gap:8px;
     }
     .orderGuidesBtn{ justify-self:center; }
+    /* Search results palette (Layout Edit mode) — floating, non-blocking. */
+    .searchPalette{
+      position: fixed;
+      right: max(8px, env(safe-area-inset-right, 0px));
+      bottom: calc(var(--bottomBarH) + 14px + env(safe-area-inset-bottom, 0px));
+      width: min(280px, 70vw);
+      max-height: 46vh;
+      display: flex;
+      flex-direction: column;
+      background: rgba(17,26,46,0.98);
+      border: 2px solid var(--addYellowA);
+      border-radius: 14px;
+      box-shadow: 0 18px 60px rgba(0,0,0,0.6);
+      z-index: 70;
+      overflow: hidden;
+    }
+    .searchPaletteHead{
+      display:flex; align-items:center; justify-content:space-between;
+      padding: 8px 10px; font-weight:900; letter-spacing:0.3px; font-size:12px;
+      border-bottom:1px solid var(--border);
+    }
+    .searchPaletteClose{ padding:2px 8px; font-size:16px; line-height:1; }
+    .searchPaletteHelp{ padding:6px 10px; font-size:11px; color:var(--muted); }
+    .searchPaletteList{ overflow:auto; -webkit-overflow-scrolling:touch; padding:6px; }
+    .searchPaletteItem{
+      display:flex; flex-direction:column; gap:2px;
+      padding:10px; margin-bottom:6px; border-radius:10px;
+      border:1px solid var(--border); background:rgba(255,255,255,0.05);
+      cursor:grab; touch-action:none; user-select:none;
+    }
+    .searchPaletteItem .spName{ font-weight:800; font-size:13px; }
+    .searchPaletteItem .spSec{ font-size:11px; color:var(--muted); }
+    .searchPaletteEmpty{ padding:10px; color:var(--muted); font-size:12px; }
+    .searchPaletteGhost{
+      position: fixed; z-index: 200; pointer-events:none;
+      transform: translate(-50%, -50%);
+      padding:8px 12px; border-radius:10px; font-weight:800; font-size:13px;
+      background: var(--addYellowA); color:#1a1300;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+    .sectionDropHover{ outline: 3px solid var(--addYellowA) !important; outline-offset: 1px; }
+    /* MOVE is the pinned first control in the scrolling right ribbon. */
+    #toggleLayoutEditBtn.layoutEditFab{
+      width: 100%;
+      min-height:var(--navBtnH);
+      height: var(--navBtnH);
+      padding: 0;
+      border-radius: 12px;
+      border: 2px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.06);
+      color: rgba(230,240,255,0.92);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-weight:900;
+      font-size: 11px;
+      letter-spacing:0.2px;
+      text-transform:uppercase;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+      flex:0 0 auto;
+    }
+    .rightNav #toggleLayoutEditBtn.layoutEditFab{
+      position:sticky;
+      top:0;
+      z-index:3;
+      background:#111a2e;
+      box-shadow:0 5px 12px rgba(11,18,32,0.92);
+    }
+    #toggleLayoutEditBtn.layoutEditFab:hover{ border-color:rgba(255,255,255,0.30); }
+    #toggleLayoutEditBtn.layoutEditFab.success{
+      border-color:var(--tabGreen);
+      background:rgba(90,200,140,0.18);
+    }
+    #toggleLayoutEditBtn.layoutEditFab.danger{
+      border-color:rgba(255,255,255,0.18);
+      background:rgba(255,255,255,0.06);
+    }
+    .rightNav #toggleLayoutEditBtn.layoutEditFab.success{ background:#16372b; }
+    .rightNav #toggleLayoutEditBtn.layoutEditFab.danger{ background:#111a2e; }
     #savePill{ justify-self:end; }
     .topRow{
       display:flex; align-items:flex-start; justify-content:space-between;
@@ -368,7 +453,7 @@
     }
     .groupSub.sectionSubGrid{
       display:grid;
-      grid-template-columns: repeat(3, minmax(40px, 0.6fr));
+      grid-template-columns: repeat(3, minmax(0, 0.8fr));
       gap:8px;
       align-items:center;
       justify-items:end;
@@ -438,7 +523,7 @@
     .sectionBody.hidden{ display:none; }
 .itemRow{
   display:grid;
-  grid-template-columns: minmax(170px, 2.6fr) minmax(40px, 0.6fr) minmax(40px, 0.6fr) minmax(40px, 0.6fr);
+  grid-template-columns: minmax(0, 2.4fr) repeat(3, minmax(46px, 0.8fr));
   gap:8px;
   align-items:center;
   background:var(--card);
@@ -450,10 +535,44 @@
   position:relative;
 }
 .itemRow .cell.fieldCellHidden{ display:none; }
+.itemRow.archived{ opacity:0.5; }
+.itemRow.archived .itemName{ text-decoration: line-through; }
+.itemRow.archived input, .itemRow.archived select{ cursor: not-allowed; }
 .itemRow.zebra{ background:#16253f; }
 .itemRow.rowFocus{
   border-color: rgba(255,255,255,0.95);
   box-shadow: 0 0 0 3px rgba(255,255,255,0.18);
+}
+body:not(.layoutEditOn) .itemRow.behindBarDragRow .itemName{
+  align-self:stretch;
+  justify-self:stretch;
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  cursor:ns-resize;
+  touch-action:none;
+  user-select:none;
+  -webkit-user-select:none;
+}
+body:not(.layoutEditOn) .itemRow.behindBarDragRow .cell[data-field-cell="h"] .label,
+body:not(.layoutEditOn) .itemRow.behindBarDragRow .cell[data-field-cell="j"] .label{
+  cursor:ns-resize;
+  touch-action:none;
+  user-select:none;
+  -webkit-user-select:none;
+}
+.itemRow.behindBarDragActive{
+  border-color:var(--addYellowA);
+  box-shadow:0 0 0 3px var(--addYellowB);
+}
+.itemRow.behindBarDragActive .itemName{
+  color:var(--addYellowA);
+  transform:scale(2.5);
+  z-index:3;
+}
+.itemRow.behindBarDragActive input[data-field="g"]{
+  border-color:var(--addYellowA);
+  background:rgba(255,255,255,0.12);
 }
 .itemName{
   font-weight:850; line-height:1.15; font-size:14px;
@@ -527,15 +646,8 @@
     }
     @media (max-width: 520px){
       .itemRow{
-        grid-template-columns: minmax(140px, 2.8fr) minmax(36px, 0.6fr) minmax(36px, 0.6fr) minmax(36px, 0.6fr);
+        grid-template-columns: minmax(0, 2.6fr) repeat(3, minmax(40px, 0.8fr));
         gap:8px;
-      }
-      .itemName{
-        text-align:right; justify-self:end;
-        white-space:normal;
-        display:-webkit-box;
-        -webkit-line-clamp:2;
-        -webkit-box-orient:vertical;
       }
       .cell input, .cell select{ padding:9px 8px; font-size:16px; }
     }
@@ -546,12 +658,28 @@
       right: 8px;
       z-index: 20;
       width: var(--rightNavW);
+      max-height:calc(100vh - 180px);
+      max-height:calc(100dvh - 180px);
       display:flex;
       flex-direction:column;
       gap:8px;
       align-items:stretch;
       pointer-events:auto;
+      overflow-y:auto;
+      overflow-x:hidden;
+      overscroll-behavior:contain;
+      touch-action:pan-y;
+      -webkit-overflow-scrolling:touch;
+      scrollbar-width:thin;
+      scrollbar-color:rgba(152,162,179,0.8) rgba(17,26,46,0.35);
+      scroll-padding-top:calc(var(--navBtnH) + 8px);
+      padding-bottom:4px;
+      box-sizing:border-box;
     }
+    .rightNav::-webkit-scrollbar{ width:5px; }
+    .rightNav::-webkit-scrollbar-track{ background:rgba(17,26,46,0.35); border-radius:999px; }
+    .rightNav::-webkit-scrollbar-thumb{ background:rgba(152,162,179,0.8); border-radius:999px; }
+    .rightNav .tabBtn{ width:100%; flex:0 0 auto; }
 .leftNav{
   position:fixed;
   top: calc(112px + var(--navOffsetY));
@@ -690,6 +818,23 @@
     }
     .bottomBar input{ flex: 1 1 auto; }
     .bottomBar .smallBtn{ padding:10px 10px; }
+    .bottomAdjustControls{
+      display:flex;
+      flex:0 0 auto;
+      gap:6px;
+      align-items:center;
+    }
+    .bottomBar .bottomAdjustBtn{
+      width:44px;
+      min-width:44px;
+      padding:10px 0;
+      font-size:20px;
+      line-height:1;
+    }
+    .bottomBar .bottomAdjustBtn:disabled{
+      cursor:not-allowed;
+      opacity:0.4;
+    }
     /* ADD MODAL */
     .overlay{
       position: fixed;
@@ -700,18 +845,29 @@
       align-items:center;
       justify-content:center;
       padding: 14px;
+      box-sizing:border-box;
+      overflow-y:auto;
+      overflow-x:hidden;
+      overscroll-behavior:contain;
+      -webkit-overflow-scrolling:touch;
     }
     .modal{
       width: min(720px, 100%);
+      max-width:100%;
       background: rgba(17,26,46,0.98);
       border: 2px solid var(--addYellowA);
       border-radius: 16px;
       padding: 14px;
+      box-sizing:border-box;
       box-shadow: 0 18px 60px rgba(0,0,0,0.55);
-      max-height: 90vh;
-      overflow: auto;
+      max-height: calc(100vh - 28px);
+      max-height: calc(100dvh - 28px);
+      min-height:0;
+      overflow-y:auto;
+      overflow-x:hidden;
       overscroll-behavior: contain;
       -webkit-overflow-scrolling: touch;
+      scrollbar-gutter:stable;
     }
     button.customBtn{
       background: var(--btn-custom-bg, rgba(255,255,255,0.06));
@@ -727,6 +883,25 @@
     .loadingOverlay{
       background: rgba(11,18,32,0.86);
       z-index: 90;
+    }
+    body.launchLocked #launchPinOverlay,
+    .launchPinOverlay{
+      background:var(--bg);
+      z-index:1000;
+    }
+    body.launchLocked #launchPinOverlay{
+      display:flex;
+      visibility:visible;
+    }
+    .launchPinModal{
+      width:min(420px, 100%);
+    }
+    .launchPinError{
+      min-height:20px;
+      margin-top:10px;
+      color:#ff9b9b;
+      font-size:13px;
+      font-weight:800;
     }
     .loadingCard{
       width: min(360px, 100%);
@@ -792,8 +967,10 @@
     }
     .customizeModal{
       width: min(980px, 100%);
-      max-height: 84vh;
-      overflow:auto;
+      max-height: calc(100vh - 28px);
+      max-height: calc(100dvh - 28px);
+      overflow-y:auto;
+      overflow-x:hidden;
     }
     .customizeSection{
       margin-top: 10px;
@@ -1407,6 +1584,126 @@
     tr.sectionEnd td{
       border-bottom: 4px solid #000 !important;
     }
+    .batchBottleCount{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      font-size:11px;
+      letter-spacing:0.2px;
+      white-space:nowrap;
+    }
+    .batchBottleCount input{
+      width:86px;
+      padding:8px 10px;
+      border-radius:10px;
+      border:1px solid rgba(255,255,255,0.24);
+      background:rgba(255,255,255,0.08);
+      color:var(--text);
+      font-size:16px;
+      font-weight:800;
+    }
+    .batchIngredientRow{
+      grid-template-columns:minmax(0, 1fr) minmax(150px, 0.35fr);
+      padding-left:52px;
+    }
+    .batchIngredientRow .itemName{
+      justify-self:start;
+      text-align:left;
+    }
+    .batchIngredientRow .itemName small{
+      display:block;
+      margin-top:3px;
+      color:var(--muted);
+      font-size:10px;
+      font-weight:800;
+      white-space:normal;
+    }
+    .batchIngredientAmount{
+      display:flex;
+      justify-content:flex-end;
+      align-items:baseline;
+      gap:7px;
+      color:var(--text);
+    }
+    .batchIngredientAmount strong{ font-size:20px; }
+    .batchIngredientAmount span{ font-size:11px; color:var(--muted); font-weight:800; }
+    .batchRecipesModal{ width:min(860px, 100%); }
+    .batchRecipeList{ display:grid; gap:8px; margin-top:12px; }
+    .batchRecipeCard{
+      display:grid;
+      grid-template-columns:minmax(0, 1.3fr) minmax(0, 1fr) auto;
+      gap:12px;
+      align-items:center;
+      width:100%;
+      text-align:left;
+      text-transform:none;
+    }
+    .batchRecipeCardName{ font-weight:900; text-transform:uppercase; }
+    .volumeField{ display:grid; grid-template-columns:minmax(0, 1fr) 92px; gap:8px; }
+    .volumeField input, .volumeField select{ width:100%; }
+    .batchIngredientList{ display:grid; gap:8px; margin-top:10px; }
+    .batchIngredientEditorRow{
+      display:block;
+      padding:10px;
+      border:1px solid var(--border);
+      border-radius:12px;
+      background:rgba(255,255,255,0.025);
+    }
+    .batchIngredientCore{
+      display:grid;
+      grid-template-columns:150px minmax(220px, 1fr) 120px 92px auto;
+      gap:8px;
+      align-items:center;
+    }
+    .batchIngredientEditorRow input,
+    .batchIngredientEditorRow select{
+      width:100%;
+      box-sizing:border-box;
+      padding:10px;
+      border-radius:10px;
+      border:1px solid var(--border);
+      background:rgba(255,255,255,0.05);
+      color:var(--text);
+      font-size:16px;
+    }
+    .batchIngredientOptional{
+      margin-top:10px;
+      padding-top:8px;
+      border-top:1px solid var(--border);
+    }
+    .batchIngredientOptional summary{
+      cursor:pointer;
+      color:var(--muted);
+      font-size:12px;
+      font-weight:850;
+      text-transform:uppercase;
+    }
+    .batchIngredientOptionalGrid{
+      display:grid;
+      grid-template-columns:repeat(2, minmax(0, 1fr));
+      gap:8px;
+      margin-top:10px;
+    }
+    .batchIngredientOptionalGrid label{
+      display:grid;
+      gap:5px;
+    }
+    .batchIngredientOptionalGrid label span{
+      color:var(--muted);
+      font-size:11px;
+      font-weight:800;
+    }
+    .batchIngredientOptionalGrid .batchIngredientNotes{ grid-column:1 / -1; }
+    @media (max-width: 700px){
+      .batchRecipeCard{ grid-template-columns:1fr; gap:4px; }
+      .batchIngredientCore{ grid-template-columns:1fr 1fr; }
+      .batchIngredientCore > [data-batch-ingredient-kind],
+      .batchIngredientCore > [data-batch-ingredient-id],
+      .batchIngredientCore > [data-batch-ingredient-name]{ grid-column:1 / -1; }
+      .batchIngredientOptionalGrid{ grid-template-columns:1fr; }
+      .batchIngredientOptionalGrid .batchIngredientNotes{ grid-column:auto; }
+      .batchBottleCount span{ display:none; }
+    }
     .printPages,
     .printPage,
     table.printTable,
@@ -1460,10 +1757,13 @@
        item names a little more room than the cramped desktop default. */
     @media (min-width: 521px) and (max-width: 1024px){
       .itemRow{
-        grid-template-columns: minmax(160px, 2.4fr) minmax(56px, 0.7fr) minmax(56px, 0.7fr) minmax(56px, 0.7fr);
+        grid-template-columns: minmax(0, 2.4fr) repeat(3, minmax(52px, 0.8fr));
       }
       .cell input, .cell select{ padding:12px 10px; font-size:16px; }
-      .modal{ max-height: 82vh; }
+      .modal{
+        max-height: calc(100vh - 28px);
+        max-height: calc(100dvh - 28px);
+      }
     }
 
     /* Touch devices (iPad): enlarge controls to comfortable tap targets and
