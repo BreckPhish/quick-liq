@@ -512,6 +512,16 @@
       </div>
     </div>
   </div>
+  <!-- BATCH RECIPES MANAGER MODAL -->
+  <div id="batchManagerOverlay" class="overlay" onclick="batchManagerOverlayClick(event)">
+    <div class="modal batchManagerModal" onclick="event.stopPropagation()">
+      <div class="modalTitle">
+        <span id="batchManagerTitle">BATCH COCKTAIL RECIPES</span>
+        <button class="modalClose" onclick="closeBatchManager_()" data-btn-key="batch-close" data-btn-rename="1">Close</button>
+      </div>
+      <div id="batchManagerBody"></div>
+    </div>
+  </div>
   <!-- SHORTCUT ITEMS MODAL -->
   <div id="shortcutOverlay" class="overlay" onclick="shortcutOverlayClick(event)">
     <div class="modal" onclick="event.stopPropagation()">

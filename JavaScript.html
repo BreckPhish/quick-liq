@@ -16,6 +16,9 @@ let categories = [];
 let secondarySections = [];
 let sectionShortcuts = {};
 let archivedItems = new Set();
+let batchRecipes = [];
+const BATCH_GROUP_KEY = 'BATCH_RECIPES';
+const ML_PER_FL_OZ = 29.5735295625;
 let distributors = [];
 let orderGuideSheets = [];
 let orderGuideSheetNames = [];
@@ -3857,6 +3860,7 @@ ${pagesHtml}
         secondarySections = data.secondarySections || [];
         sectionShortcuts = (uiSettings && typeof uiSettings.sectionShortcuts === 'object') ? uiSettings.sectionShortcuts : {};
         archivedItems = new Set((Array.isArray(uiSettings.archivedItemIds) ? uiSettings.archivedItemIds : []).map(v => String(v || '').trim()).filter(Boolean));
+        batchRecipes = Array.isArray(uiSettings.batchRecipes) ? uiSettings.batchRecipes : [];
         distributors = data.distributors || [];
         orderGuideSheets = data.orderGuideSheets || [];
         orderGuideSheetNames = data.orderGuideSheetNames || data.orderGuideSheets || [];
@@ -4509,6 +4513,73 @@ ${pagesHtml}
     copyItemToSectionShortcut_(drag.id, sec.key);
     setStatus(`Added item ${drag.id} to ${label || sec.key}.`);
   }
+  // ---- Batch cocktail recipes: unit math + per-item liquor aggregation ----
+  function parseVolumeMl_(text){
+    const raw = String(text == null ? '' : text).trim().toLowerCase();
+    if (!raw) return null;
+    const m = raw.match(/([0-9]+(?:\.[0-9]+)?)\s*([a-z\s.]*)/);
+    if (!m) return null;
+    const value = parseFloat(m[1]);
+    if (!isFinite(value) || value <= 0) return null;
+    const unit = String(m[2] || '').replace(/[\s.]/g, '');
+    if (!unit || ['ml','milliliter','milliliters','millilitre','millilitres','cc'].includes(unit)) return value;
+    if (['l','lt','ltr','liter','liters','litre','litres'].includes(unit)) return value * 1000;
+    if (['oz','ozs','floz','flozs','flounce','flounces','ounce','ounces'].includes(unit)) return value * ML_PER_FL_OZ;
+    return null;
+  }
+  function mlFromUnit_(value, unit){
+    const v = parseFloat(value);
+    if (!isFinite(v) || v <= 0) return 0;
+    return String(unit).toLowerCase() === 'oz' ? v * ML_PER_FL_OZ : v;
+  }
+  function volumeToUnit_(ml, unit){
+    const v = Number(ml);
+    if (!isFinite(v) || v <= 0) return '';
+    const out = String(unit).toLowerCase() === 'oz' ? v / ML_PER_FL_OZ : v;
+    const r = Math.round(out * 100) / 100;
+    return Number.isInteger(r) ? String(r) : String(r);
+  }
+  function itemUnitMlById_(id){
+    const idStr = String(id || '').trim();
+    if (!idStr) return null;
+    const row = (allRows || []).find(r => r && r.type === 'item' && String(r.id || '').trim() === idStr);
+    return row ? parseVolumeMl_(row.bottleSize) : null;
+  }
+  function itemNameById_(id){
+    const idStr = String(id || '').trim();
+    const row = (allRows || []).find(r => r && r.type === 'item' && String(r.id || '').trim() === idStr);
+    return row ? String(row.b || '') : idStr;
+  }
+  // Bottles of `item` present per ONE batched bottle of the recipe (null if not computable).
+  function batchBottlesPerBottle_(recipe, ing){
+    const yieldMl = Number(recipe && recipe.yieldMl);
+    const bottleMl = Number(recipe && recipe.bottleMl);
+    const amountMl = Number(ing && ing.amountMl);
+    const unitMl = itemUnitMlById_(ing && ing.itemId);
+    if (!(yieldMl > 0) || !(bottleMl > 0) || !(amountMl > 0) || !(unitMl > 0)) return null;
+    return (amountMl / yieldMl) * bottleMl / unitMl;
+  }
+  // Map of itemId -> total fractional bottles contributed by all batch recipes' current counts.
+  function batchBottlesByItemId_(){
+    const out = {};
+    (batchRecipes || []).forEach(recipe => {
+      const count = Number(recipe && recipe.bottleCount);
+      if (!(count > 0)) return;
+      (Array.isArray(recipe.ingredients) ? recipe.ingredients : []).forEach(ing => {
+        const per = batchBottlesPerBottle_(recipe, ing);
+        if (per == null) return;
+        const id = String(ing.itemId || '').trim();
+        if (!id) return;
+        out[id] = (out[id] || 0) + per * count;
+      });
+    });
+    return out;
+  }
+  function batchBottlesForItem_(id){
+    const idStr = String(id || '').trim();
+    if (!idStr) return 0;
+    return batchBottlesByItemId_()[idStr] || 0;
+  }
   function liveFieldValue_(id, field, fallback){
     const row = document.querySelector(`.itemRow[data-id="${cssEscape_(id)}"]`);
     if (!row) return String(fallback ?? '');
@@ -4538,6 +4609,7 @@ ${pagesHtml}
     measureEl.innerHTML = '';
     const dateVal = (document.getElementById('lastCompleted')?.value || '').trim();
     const initVal = (document.getElementById('initials')?.value || '').trim();
+    const batchMap = blank ? {} : batchBottlesByItemId_();
     const items = [];
     let firstInSection = true;
     let currentSection = '';
@@ -4568,8 +4640,13 @@ ${pagesHtml}
         const id = String(r.id || '');
         const sectionBreak = firstInSection && !suppressNextBreak;
         const barVal = blank ? '' : liveFieldValue_(id, 'g', r.g);
-        const otherVal = blank ? '' : liveFieldValue_(id, 'h', r.h);
+        const otherBase = blank ? '' : liveFieldValue_(id, 'h', r.h);
         const backVal = blank ? '' : liveFieldValue_(id, 'j', r.j);
+        // Fold batched-cocktail liquor (in tenths of bottles) into the OTHER column total.
+        const batchAdd = blank ? 0 : (batchMap[id] || 0);
+        const otherVal = (!blank && batchAdd > 0)
+          ? formatTotal_(parseCount_(otherBase) + batchAdd)
+          : otherBase;
         const hasAny = !blank && [barVal, otherVal, backVal].some(v => String(v ?? '').trim() !== '');
         const total = hasAny
           ? formatTotal_(parseCount_(barVal) + parseCount_(otherVal) + parseCount_(backVal))
@@ -4717,6 +4794,7 @@ ${pagesHtml}
     wireRowClickFocus_();
     wireCollapsers_();
     wireGroupCollapsers_();
+    wireBatchGroup_();
     wireGroupEditButtons_();
     wireLayoutDrag_();
     wireSectionEditButtons_();
@@ -5610,7 +5688,111 @@ function appendLineEditorRow_(list, line, opts){
         html += renderGroupBlock_(node.key, idx > 0);
       }
     });
+    html += renderBatchGroup_(html.length > 0);
     el.innerHTML = html || `<div class="status">No results.</div>`;
+  }
+  // Virtual "BATCH RECIPES" group: each recipe is a section whose header carries a
+  // bottle-count input; its children are the tagged ingredient items with computed
+  // per-bottle and on-hand (bottles) amounts. Defined entirely from uiSettings.batchRecipes.
+  function renderBatchGroup_(addSpacer){
+    const recipes = Array.isArray(batchRecipes) ? batchRecipes : [];
+    const groupCollapsed = isGroupCollapsed_(BATCH_GROUP_KEY);
+    const editIcon = `
+      <svg class="editIcon" viewBox="0 0 24 24" stroke-width="1.5" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+        <path d="M12 15C13.6569 15 15 13.6569 15 12C15 10.3431 13.6569 9 12 9C10.3431 9 9 10.3431 9 12C9 13.6569 10.3431 15 12 15Z" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+        <path d="M2 12L9 12" stroke="#ffffff" stroke-width="1.5"></path>
+        <path d="M15 12L22 12" stroke="#ffffff" stroke-width="1.5"></path>
+      </svg>`;
+    let out = '';
+    if (addSpacer) out += `<div class="sectionSpacer"></div>`;
+    out += `
+      <div id="group_${escapeHtml(BATCH_GROUP_KEY)}" class="group groupHeading batchGroupHeading ${groupCollapsed ? "collapsed" : ""}" data-group-key="${escapeHtml(BATCH_GROUP_KEY)}" data-batch-group="1">
+        <div class="groupLeft">
+          <div class="groupTitle">
+            <button class="batchIconBtn batchManageBtn" type="button" title="Manage batch recipes" aria-label="Manage batch recipes" data-batch-manage="1">${editIcon}</button>
+            <div>BATCH RECIPES</div>
+            <span class="numBadge">${recipes.length}</span>
+          </div>
+          <div class="groupSub">GROUP</div>
+        </div>
+        <div class="groupRight"><div class="chev" aria-hidden="true">▾</div></div>
+      </div>
+      <div class="groupBody ${groupCollapsed ? "hidden" : ""}" data-group-body="${escapeHtml(BATCH_GROUP_KEY)}">
+    `;
+    if (!recipes.length){
+      out += `<div class="status batchEmpty">No batch recipes yet. Tap the pencil above to create one.</div>`;
+    }
+    recipes.forEach((recipe, idx) => {
+      const rid = String(recipe.id || '');
+      const secKey = `BATCH::${rid}`;
+      const isCollapsed = !!collapsedByKey[secKey];
+      const count = Number(recipe.bottleCount) || 0;
+      const unit = (String(recipe.unit || 'ml').toLowerCase() === 'oz') ? 'fl oz' : 'mL';
+      const yieldDisp = volumeToUnit_(recipe.yieldMl, recipe.unit);
+      const bottleDisp = volumeToUnit_(recipe.bottleMl, recipe.unit);
+      const sub = `${bottleDisp || '?'} ${unit}/btl · yield ${yieldDisp || '?'} ${unit}`;
+      if (idx > 0) out += `<div class="sectionSpacer"></div>`;
+      out += `
+        <div id="sec_${escapeHtml(secKey)}" class="group batchSection ${isCollapsed ? "collapsed" : ""}" data-section-key="${escapeHtml(secKey)}" data-section-type="batch" data-batch-recipe="${escapeHtml(rid)}">
+          <div class="groupLeft">
+            <div class="groupTitle">
+              <button class="batchIconBtn batchEditBtn" type="button" title="Edit batch recipe" aria-label="Edit batch recipe" data-batch-edit="${escapeHtml(rid)}">${editIcon}</button>
+              <div>${escapeHtml(recipe.name || 'Untitled batch')}</div>
+            </div>
+            <div class="groupSub batchSectionSub">${escapeHtml(sub)}</div>
+          </div>
+          <div class="groupRight">
+            <div class="batchCountWrap" title="Batched bottles on hand">
+              <span class="batchCountLabel">BOTTLES</span>
+              <input type="text" class="batchCountInput" inputmode="decimal" pattern="[0-9]*" enterkeyhint="done"
+                     autocapitalize="off" autocomplete="off" data-batch-count="${escapeHtml(rid)}"
+                     value="${escapeHtml(count ? String(count) : '')}" onclick="event.stopPropagation()" />
+            </div>
+            <div class="chev" aria-hidden="true">▾</div>
+          </div>
+        </div>
+        <div class="sectionBody ${isCollapsed ? "hidden" : ""}" data-section-body="${escapeHtml(secKey)}">
+      `;
+      const ingredients = Array.isArray(recipe.ingredients) ? recipe.ingredients : [];
+      if (!ingredients.length){
+        out += `<div class="status batchEmpty">No ingredients tagged.</div>`;
+      }
+      ingredients.forEach((ing, i) => {
+        const id = String(ing.itemId || '').trim();
+        const per = batchBottlesPerBottle_(recipe, ing);
+        const perTxt = per == null ? '—' : formatBatchBottles_(per);
+        const onHandTxt = per == null ? '—' : formatBatchBottles_(per * count);
+        const amtTxt = volumeToUnit_(ing.amountMl, recipe.unit);
+        const missing = per == null;
+        const zebra = (i % 2 === 0) ? '' : 'zebra';
+        out += `
+          <div class="itemRow batchItemRow ${zebra}${missing ? ' batchMissing' : ''}" data-batch-child="${escapeHtml(rid)}" data-item-id="${escapeHtml(id)}" title="${escapeHtml(itemNameById_(id))}">
+            <div class="itemName">${escapeHtml(itemNameById_(id))}<span class="batchIngAmt">${escapeHtml(amtTxt)} ${escapeHtml(unit)}/batch</span></div>
+            <div class="cell batchCell">
+              <div class="label">PER BTL</div>
+              <div class="batchVal" data-batch-per="${escapeHtml(rid)}::${escapeHtml(id)}">${escapeHtml(perTxt)}</div>
+            </div>
+            <div class="cell batchCell">
+              <div class="label">ON HAND</div>
+              <div class="batchVal" data-batch-onhand="${escapeHtml(rid)}::${escapeHtml(id)}">${escapeHtml(onHandTxt)}</div>
+            </div>
+            <div class="cell batchCell">
+              <div class="label">BOTTLES</div>
+              <div class="batchVal batchUnit">${missing ? 'set size' : 'btl'}</div>
+            </div>
+          </div>
+        `;
+      });
+      out += `</div>`;
+    });
+    out += `</div>`;
+    return out;
+  }
+  function formatBatchBottles_(num){
+    if (!Number.isFinite(num)) return '—';
+    const rounded = Math.round(num * 10) / 10;
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
   }
   function wireCollapsers_(){
     document.querySelectorAll(`.group[data-section-key]`).forEach(h => {
@@ -5626,6 +5808,7 @@ function appendLineEditorRow_(list, line, opts){
   function wireGroupCollapsers_(){
     document.querySelectorAll(`.groupHeading[data-group-key]`).forEach(h => {
       if (h.dataset.bound === "1") return;
+      if (h.getAttribute('data-batch-group') === '1') return; // wired by wireBatchGroup_
       h.dataset.bound = "1";
       h.addEventListener("click", () => {
         if (layoutEditMode) return;
@@ -5842,6 +6025,316 @@ function appendLineEditorRow_(list, line, opts){
     applyGroupCollapseState_();
     buildRightNav_();
     updateRightTabStates_();
+  }
+  function wireBatchGroup_(){
+    // Group header collapse (self-contained; not part of the spreadsheet group tree).
+    const gh = document.querySelector('.batchGroupHeading[data-batch-group="1"]');
+    if (gh && gh.dataset.bound !== "1"){
+      gh.dataset.bound = "1";
+      gh.addEventListener('click', () => {
+        if (layoutEditMode) return;
+        const body = document.querySelector(`.groupBody[data-group-body="${cssEscape_(BATCH_GROUP_KEY)}"]`);
+        const next = !(body && body.classList.contains('hidden'));
+        if (body) body.classList.toggle('hidden', next);
+        gh.classList.toggle('collapsed', next);
+        groupCollapsedByKey[BATCH_GROUP_KEY] = next;
+        saveGroupCollapsed_(groupCollapsedByKey);
+      });
+    }
+    document.querySelectorAll('[data-batch-manage]').forEach(btn => {
+      if (btn.dataset.bound === "1") return;
+      btn.dataset.bound = "1";
+      btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openBatchManager_(); });
+    });
+    document.querySelectorAll('[data-batch-edit]').forEach(btn => {
+      if (btn.dataset.bound === "1") return;
+      btn.dataset.bound = "1";
+      btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openBatchManager_(btn.getAttribute('data-batch-edit')); });
+    });
+    document.querySelectorAll('input[data-batch-count]').forEach(inp => {
+      if (inp.dataset.bound === "1") return;
+      inp.dataset.bound = "1";
+      inp.addEventListener('input', () => onBatchCountInput_(inp.getAttribute('data-batch-count'), inp.value));
+    });
+  }
+  function onBatchCountInput_(recipeId, value){
+    const recipe = (batchRecipes || []).find(r => String(r.id || '') === String(recipeId));
+    if (!recipe) return;
+    const n = parseFloat(String(value).trim());
+    recipe.bottleCount = Number.isFinite(n) && n >= 0 ? n : 0;
+    // Live-update this recipe's child ON HAND cells without a full re-render.
+    (Array.isArray(recipe.ingredients) ? recipe.ingredients : []).forEach(ing => {
+      const id = String(ing.itemId || '').trim();
+      const per = batchBottlesPerBottle_(recipe, ing);
+      const cell = document.querySelector(`[data-batch-onhand="${cssEscape_(recipeId)}::${cssEscape_(id)}"]`);
+      if (cell) cell.textContent = (per == null) ? '—' : formatBatchBottles_(per * recipe.bottleCount);
+    });
+    scheduleBatchSave_();
+  }
+  let batchSaveTimer_ = null;
+  function scheduleBatchSave_(){
+    if (batchSaveTimer_) clearTimeout(batchSaveTimer_);
+    batchSaveTimer_ = setTimeout(saveBatchRecipesNow_, 700);
+  }
+  function saveBatchRecipesNow_(){
+    if (batchSaveTimer_){ clearTimeout(batchSaveTimer_); batchSaveTimer_ = null; }
+    uiSettings = uiSettings && typeof uiSettings === 'object' ? uiSettings : {};
+    uiSettings.batchRecipes = batchRecipes;
+    setSavePill('saving', 'Saving…');
+    google.script.run
+      .withSuccessHandler(res => {
+        if (res && Array.isArray(res.batchRecipes)) { batchRecipes = res.batchRecipes; uiSettings.batchRecipes = batchRecipes; }
+        setSavePill('idle', 'Idle');
+      })
+      .withFailureHandler(err => {
+        setSavePill('error', 'Save failed');
+        setBanner('err', 'Could not save batch recipes: ' + (err && err.message ? err.message : err));
+      })
+      .saveBatchRecipes({ recipes: batchRecipes });
+  }
+  // ---- Batch recipe manager modal ----
+  let batchEditDraft = null;
+  function escapeJsAttr_(s){ return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r?\n/g, ' '); }
+  function unitLabel_(unit){ return (String(unit || 'ml').toLowerCase() === 'oz') ? 'fl oz' : 'mL'; }
+  function openBatchManager_(recipeId){
+    const el = document.getElementById('batchManagerOverlay');
+    if (!el) return;
+    el.style.display = 'flex';
+    if (recipeId) startBatchEditor_(String(recipeId));
+    else renderBatchList_();
+  }
+  function closeBatchManager_(){
+    const el = document.getElementById('batchManagerOverlay');
+    if (el) el.style.display = 'none';
+    batchEditDraft = null;
+  }
+  function batchManagerOverlayClick(e){ closeBatchManager_(); }
+  function renderBatchList_(){
+    batchEditDraft = null;
+    const titleEl = document.getElementById('batchManagerTitle');
+    if (titleEl) titleEl.textContent = 'BATCH COCKTAIL RECIPES';
+    const body = document.getElementById('batchManagerBody');
+    if (!body) return;
+    const rowsHtml = (batchRecipes || []).map(r => {
+      const unit = unitLabel_(r.unit);
+      const ing = (Array.isArray(r.ingredients) ? r.ingredients : []).length;
+      return `
+        <div class="batchListRow">
+          <div class="batchListInfo">
+            <div class="batchListName">${escapeHtml(r.name || 'Untitled')}</div>
+            <div class="batchListMeta">${ing} ingredient${ing === 1 ? '' : 's'} · ${escapeHtml(volumeToUnit_(r.bottleMl, r.unit) || '?')} ${escapeHtml(unit)}/btl · ${Number(r.bottleCount) || 0} on hand</div>
+          </div>
+          <div class="batchListActions">
+            <button class="primary" type="button" onclick="startBatchEditor_('${escapeJsAttr_(r.id)}')">Edit</button>
+            <button class="danger" type="button" onclick="deleteBatchRecipe_('${escapeJsAttr_(r.id)}')">Delete</button>
+          </div>
+        </div>`;
+    }).join('');
+    body.innerHTML = `
+      <div class="batchList">${rowsHtml || '<div class="status">No recipes yet.</div>'}</div>
+      <div class="actions"><button class="primary" type="button" onclick="startBatchEditor_('')">+ New Recipe</button></div>
+    `;
+  }
+  function startBatchEditor_(recipeId){
+    const existing = (batchRecipes || []).find(r => String(r.id || '') === String(recipeId || ''));
+    batchEditDraft = existing
+      ? JSON.parse(JSON.stringify(existing))
+      : { id: '', name: '', unit: 'ml', yieldMl: 0, bottleMl: 0, bottleCount: 0, ingredients: [] };
+    renderBatchEditor_();
+  }
+  function readBatchForm_(fromUnit){
+    if (!batchEditDraft) return;
+    const unit = (fromUnit ? fromUnit : (document.getElementById('batchUnit')?.value || 'ml'));
+    const g = id => document.getElementById(id);
+    if (g('batchName')) batchEditDraft.name = (g('batchName').value || '').trim();
+    if (g('batchYield')) batchEditDraft.yieldMl = mlFromUnit_(g('batchYield').value, unit);
+    if (g('batchBottle')) batchEditDraft.bottleMl = mlFromUnit_(g('batchBottle').value, unit);
+    if (g('batchCount')) { const c = parseFloat(g('batchCount').value); batchEditDraft.bottleCount = (isFinite(c) && c >= 0) ? c : 0; }
+    (batchEditDraft.ingredients || []).forEach(ing => {
+      const inp = document.querySelector(`[data-ing-amt="${cssEscape_(ing.itemId)}"]`);
+      if (inp) ing.amountMl = mlFromUnit_(inp.value, unit);
+    });
+  }
+  function onBatchUnitChange_(){
+    const sel = document.getElementById('batchUnit');
+    if (!sel || !batchEditDraft) return;
+    readBatchForm_(batchEditDraft.unit); // capture current numbers in the OLD unit
+    batchEditDraft.unit = (sel.value === 'oz') ? 'oz' : 'ml';
+    renderBatchEditor_();
+  }
+  function renderBatchEditor_(){
+    if (!batchEditDraft) return;
+    const titleEl = document.getElementById('batchManagerTitle');
+    if (titleEl) titleEl.textContent = batchEditDraft.id ? 'EDIT BATCH RECIPE' : 'NEW BATCH RECIPE';
+    const body = document.getElementById('batchManagerBody');
+    if (!body) return;
+    const unit = batchEditDraft.unit;
+    const ul = unitLabel_(unit);
+    const ingHtml = (batchEditDraft.ingredients || []).map(ing => {
+      const id = String(ing.itemId || '');
+      const unitMl = itemUnitMlById_(id);
+      const missing = !(unitMl > 0);
+      return `
+        <div class="batchIngRow${missing ? ' batchMissing' : ''}">
+          <div class="batchIngName">${escapeHtml(itemNameById_(id))}${missing ? ' <span class="batchWarn">bottle size unknown</span>' : ` <span class="batchIngSize">(${escapeHtml(volumeToUnit_(unitMl, unit))} ${escapeHtml(ul)}/btl)</span>`}</div>
+          <div class="batchIngAmtWrap">
+            <input type="text" inputmode="decimal" class="batchIngAmtInput" data-ing-amt="${escapeHtml(id)}" value="${escapeHtml(volumeToUnit_(ing.amountMl, unit))}" placeholder="amt" />
+            <span class="batchIngUnit">${escapeHtml(ul)}</span>
+          </div>
+          <button class="danger batchIngRemove" type="button" onclick="removeBatchIngredient_('${escapeJsAttr_(id)}')">✕</button>
+        </div>`;
+    }).join('');
+    body.innerHTML = `
+      <div class="addCard editCard batchEditCard">
+        <div class="editDetailsGrid">
+          <div class="cell">
+            <div class="label" style="justify-content:flex-start;text-align:left;">Recipe Name</div>
+            <input id="batchName" type="text" value="${escapeHtml(batchEditDraft.name || '')}" placeholder="e.g. House Margarita Batch" />
+          </div>
+          <div class="cell">
+            <div class="label" style="justify-content:flex-start;text-align:left;">Units</div>
+            <select id="batchUnit" onchange="onBatchUnitChange_()">
+              <option value="ml"${unit === 'ml' ? ' selected' : ''}>mL</option>
+              <option value="oz"${unit === 'oz' ? ' selected' : ''}>fl oz</option>
+            </select>
+          </div>
+          <div class="cell">
+            <div class="label" style="justify-content:flex-start;text-align:left;">Full Batch Yield (${escapeHtml(ul)})</div>
+            <input id="batchYield" type="text" inputmode="decimal" value="${escapeHtml(volumeToUnit_(batchEditDraft.yieldMl, unit))}" placeholder="total volume" />
+          </div>
+          <div class="cell">
+            <div class="label" style="justify-content:flex-start;text-align:left;">Batch Bottle Size (${escapeHtml(ul)})</div>
+            <input id="batchBottle" type="text" inputmode="decimal" value="${escapeHtml(volumeToUnit_(batchEditDraft.bottleMl, unit))}" placeholder="container size" />
+          </div>
+          <div class="cell">
+            <div class="label" style="justify-content:flex-start;text-align:left;">Bottles On Hand</div>
+            <input id="batchCount" type="text" inputmode="decimal" value="${escapeHtml(Number(batchEditDraft.bottleCount) ? String(batchEditDraft.bottleCount) : '')}" placeholder="0" />
+          </div>
+        </div>
+      </div>
+      <div class="addCard editCard batchEditCard">
+        <div class="customizeSectionTitle">Ingredients</div>
+        <div class="batchIngList">${ingHtml || '<div class="status">No ingredients yet. Search below to add inventory items.</div>'}</div>
+        <div class="batchIngSearchWrap">
+          <input id="batchIngSearch" type="text" placeholder="Search inventory items to add…" oninput="renderBatchIngredientResults_(this.value)" />
+          <div id="batchIngResults" class="batchIngResults"></div>
+          <div id="batchSizePrompt" class="batchSizePrompt"></div>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="primary" type="button" onclick="saveBatchEditor_()">Save Recipe</button>
+        <button type="button" onclick="renderBatchList_()">Back</button>
+      </div>
+    `;
+  }
+  function renderBatchIngredientResults_(query){
+    const out = document.getElementById('batchIngResults');
+    if (!out) return;
+    const q = norm_(String(query || '').trim());
+    if (!q){ out.innerHTML = ''; return; }
+    const have = new Set((batchEditDraft.ingredients || []).map(i => String(i.itemId || '')));
+    const seen = new Set();
+    const matches = [];
+    (allRows || []).forEach(r => {
+      if (!r || r.type !== 'item') return;
+      const id = String(r.id || '').trim();
+      if (!id || have.has(id) || seen.has(id)) return;
+      if (!norm_(r.b || '').includes(q)) return;
+      seen.add(id);
+      matches.push(r);
+    });
+    matches.sort((a, b) => String(a.b || '').localeCompare(String(b.b || '')));
+    out.innerHTML = matches.slice(0, 30).map(r => {
+      const id = String(r.id || '');
+      const ml = parseVolumeMl_(r.bottleSize);
+      const sizeTxt = ml ? `${escapeHtml(String(r.bottleSize || '').trim())}` : '<span class="batchWarn">no size</span>';
+      return `<div class="batchResult" onclick="pickBatchIngredient_('${escapeJsAttr_(id)}')"><span>${escapeHtml(r.b || '')}</span><span class="batchResultSize">${sizeTxt}</span></div>`;
+    }).join('') || '<div class="status">No matches.</div>';
+  }
+  function pickBatchIngredient_(itemId){
+    const id = String(itemId || '').trim();
+    if (!id || !batchEditDraft) return;
+    const row = (allRows || []).find(r => r && r.type === 'item' && String(r.id || '').trim() === id);
+    if (!row) return;
+    const ml = parseVolumeMl_(row.bottleSize);
+    if (!(ml > 0)) { promptBatchSize_(id); return; }
+    addBatchIngredient_(id);
+  }
+  function promptBatchSize_(itemId){
+    const id = String(itemId || '').trim();
+    const wrap = document.getElementById('batchSizePrompt');
+    if (!wrap) return;
+    wrap.innerHTML = `
+      <div class="batchSizeForm">
+        <div class="label" style="justify-content:flex-start;text-align:left;">Set bottle size for <b>${escapeHtml(itemNameById_(id))}</b> before adding:</div>
+        <div class="batchSizeFormRow">
+          <input id="batchSizeVal" type="text" inputmode="decimal" placeholder="e.g. 750" />
+          <select id="batchSizeUnit"><option value="ml">mL</option><option value="oz">fl oz</option></select>
+          <button class="primary" type="button" onclick="saveBatchSize_('${escapeJsAttr_(id)}')">Save Size</button>
+          <button type="button" onclick="document.getElementById('batchSizePrompt').innerHTML='';">Cancel</button>
+        </div>
+      </div>`;
+    setTimeout(() => { const i = document.getElementById('batchSizeVal'); if (i) i.focus(); }, 10);
+  }
+  function saveBatchSize_(itemId){
+    const id = String(itemId || '').trim();
+    const val = parseFloat((document.getElementById('batchSizeVal')?.value || '').trim());
+    const unit = (document.getElementById('batchSizeUnit')?.value === 'oz') ? 'oz' : 'ml';
+    if (!(val > 0)) { setBanner('warn', 'Enter a positive bottle size.'); return; }
+    const sizeText = unit === 'oz' ? `${val}oz` : `${val}ml`;
+    // Persist to col D, update local rows so the math sees it immediately, then add.
+    setSavePill('saving', 'Saving size…');
+    google.script.run
+      .withSuccessHandler(() => {
+        setSavePill('idle', 'Idle');
+        [baseRows, allRows].forEach(list => {
+          (list || []).forEach(r => { if (r && r.type === 'item' && String(r.id || '').trim() === id) r.bottleSize = sizeText; });
+        });
+        const wrap = document.getElementById('batchSizePrompt'); if (wrap) wrap.innerHTML = '';
+        addBatchIngredient_(id);
+      })
+      .withFailureHandler(err => { setSavePill('error', 'Save failed'); setBanner('err', 'Could not save size: ' + (err && err.message ? err.message : err)); })
+      .saveInventEdits([{ id, bottleSize: sizeText }]);
+  }
+  function addBatchIngredient_(itemId){
+    const id = String(itemId || '').trim();
+    if (!id || !batchEditDraft) return;
+    readBatchForm_();
+    if (!(batchEditDraft.ingredients || []).some(i => String(i.itemId || '') === id)){
+      batchEditDraft.ingredients = batchEditDraft.ingredients || [];
+      batchEditDraft.ingredients.push({ itemId: id, amountMl: 0 });
+    }
+    const search = document.getElementById('batchIngSearch'); if (search) search.value = '';
+    renderBatchEditor_();
+  }
+  function removeBatchIngredient_(itemId){
+    const id = String(itemId || '').trim();
+    if (!batchEditDraft) return;
+    readBatchForm_();
+    batchEditDraft.ingredients = (batchEditDraft.ingredients || []).filter(i => String(i.itemId || '') !== id);
+    renderBatchEditor_();
+  }
+  function saveBatchEditor_(){
+    if (!batchEditDraft) return;
+    readBatchForm_();
+    if (!batchEditDraft.name){ setBanner('warn', 'Give the recipe a name.'); return; }
+    if (!(batchEditDraft.yieldMl > 0) || !(batchEditDraft.bottleMl > 0)){ setBanner('warn', 'Enter a positive batch yield and bottle size.'); return; }
+    if (!batchEditDraft.id) batchEditDraft.id = 'br_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
+    const idx = (batchRecipes || []).findIndex(r => String(r.id || '') === String(batchEditDraft.id));
+    if (idx >= 0) batchRecipes[idx] = batchEditDraft;
+    else { batchRecipes = batchRecipes || []; batchRecipes.push(batchEditDraft); }
+    saveBatchRecipesNow_();
+    closeBatchManager_();
+    applyFilter();
+  }
+  function deleteBatchRecipe_(recipeId){
+    const id = String(recipeId || '').trim();
+    if (!id) return;
+    if (!confirm('Delete this batch recipe?')) return;
+    batchRecipes = (batchRecipes || []).filter(r => String(r.id || '') !== id);
+    saveBatchRecipesNow_();
+    renderBatchList_();
+    applyFilter();
   }
   function expandAll_(open){
     sectionsMeta.forEach(s => toggleSection_(s.key, open));
@@ -6347,7 +6840,7 @@ function buildLeftNav_(){
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     const target = e.target;
     if (!(target instanceof Element)) return;
-    if (target.closest('.sectionEditBtn, .groupEditBtn, .itemEditBtn')) return;
+    if (target.closest('.sectionEditBtn, .groupEditBtn, .itemEditBtn, .batchIconBtn, .batchCountInput')) return;
     const lineRow = target.closest('.lineRow[data-line-id]');
     const itemRow = target.closest('.itemRow[data-id]');
     const groupHeader = target.closest('.groupHeading[data-group-key]');
@@ -6372,11 +6865,13 @@ function buildLeftNav_(){
       sourceEl = itemRow;
     } else if (groupHeader) {
       if (groupHeader.getAttribute('data-group-dynamic') === '1') return;
+      if (groupHeader.getAttribute('data-batch-group') === '1') return; // virtual group, not reorderable
       type = 'group';
       sourceEl = groupHeader;
     } else if (sectionHeader) {
       const dynamicType = String(sectionHeader.getAttribute('data-section-dynamic') || '').trim();
       if (dynamicType) return;
+      if (sectionHeader.getAttribute('data-section-type') === 'batch') return; // virtual batch section
       type = 'section';
       sourceEl = sectionHeader;
     } else {
