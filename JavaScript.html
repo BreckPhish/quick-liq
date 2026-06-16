@@ -11599,6 +11599,24 @@ function buildLeftNav_(){
     wireKeyboardAwareSearch_();
     window.addEventListener('resize', scheduleFitItemNames_);
     window.addEventListener('orientationchange', scheduleFitItemNames_);
+    // Re-fit names whenever the rows container's width actually changes — this
+    // catches the container going from hidden/zero width to a real width, plus
+    // orientation and right-nav width changes. Width-only guard avoids a loop
+    // (shrinking fonts changes row heights, not the container width).
+    const rowsForObserver = document.getElementById('rows');
+    if (rowsForObserver && typeof ResizeObserver !== 'undefined'){
+      let lastRowsWidth_ = -1;
+      const ro = new ResizeObserver(entries => {
+        const w = entries[0] ? entries[0].contentRect.width : 0;
+        if (Math.abs(w - lastRowsWidth_) < 1) return;
+        lastRowsWidth_ = w;
+        scheduleFitItemNames_();
+      });
+      ro.observe(rowsForObserver);
+    }
+    if (document.fonts && document.fonts.ready && document.fonts.ready.then){
+      document.fonts.ready.then(scheduleFitItemNames_);
+    }
     showPage_(currentPage);
     refresh({ mode: 'percent' });
   }
