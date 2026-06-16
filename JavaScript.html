@@ -313,6 +313,7 @@ let manageDistKey = '';
     }
     if (currentPage === 'inventory') {
       scheduleNavTopSync_();
+      scheduleFitItemNames_();
     }
   }
   function openOrderGuides(){
@@ -5240,15 +5241,25 @@ ${pagesHtml}
     applyButtonSettings_();
     applyInputVisibilitySettings_();
     applyLayoutEditMode_();
-    fitItemNames_();
+    scheduleFitItemNames_();
   }
   // Shrink each item name's font just enough to show the whole name on a
   // single line within its column (down to a readable floor). Reads and writes
   // are batched to avoid layout thrash. Width scales ~linearly with font size,
   // so one measurement gives the target size without an iterative loop.
   const ITEM_NAME_BASE_FONT = 14;
-  const ITEM_NAME_MIN_FONT = 8;
+  const ITEM_NAME_MIN_FONT = 6;
   let itemNameFitRaf_ = 0;
+  // Defer to the next frame so the rows container is laid out (non-zero width)
+  // before we measure — measuring synchronously right after a render can read
+  // a zero width if the panel was just shown.
+  function scheduleFitItemNames_(){
+    if (itemNameFitRaf_) cancelAnimationFrame(itemNameFitRaf_);
+    itemNameFitRaf_ = requestAnimationFrame(() => {
+      itemNameFitRaf_ = 0;
+      fitItemNames_();
+    });
+  }
   function fitItemNames_(){
     const container = document.getElementById('rows');
     if (!container) return;
@@ -5256,7 +5267,9 @@ ${pagesHtml}
     if (!names.length) return;
     // Reset to the base font so measurements start from a known size.
     names.forEach(el => { el.style.fontSize = ''; });
-    // Read pass: measure overflow for every name (single reflow).
+    // Read pass: measure overflow for every name (single reflow). If the
+    // container is hidden (zero width) skip — a later show/resize re-fits.
+    if (!container.clientWidth) return;
     const targets = [];
     names.forEach(el => {
       const cw = el.clientWidth;
@@ -5264,7 +5277,7 @@ ${pagesHtml}
       if (cw > 0 && sw > cw + 1){
         const ratio = cw / sw;
         // Slight safety margin so the last glyph isn't clipped.
-        let size = ITEM_NAME_BASE_FONT * ratio * 0.97;
+        let size = ITEM_NAME_BASE_FONT * ratio * 0.96;
         size = Math.max(ITEM_NAME_MIN_FONT, Math.floor(size * 100) / 100);
         targets.push([el, size]);
       }
@@ -11584,10 +11597,8 @@ function buildLeftNav_(){
     }
     cacheDefaultUi_();
     wireKeyboardAwareSearch_();
-    window.addEventListener('resize', () => {
-      if (itemNameFitRaf_) cancelAnimationFrame(itemNameFitRaf_);
-      itemNameFitRaf_ = requestAnimationFrame(fitItemNames_);
-    });
+    window.addEventListener('resize', scheduleFitItemNames_);
+    window.addEventListener('orientationchange', scheduleFitItemNames_);
     showPage_(currentPage);
     refresh({ mode: 'percent' });
   }
