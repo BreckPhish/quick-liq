@@ -4487,7 +4487,8 @@ ${pagesHtml}
         items.push(item);
       });
       if (!items.length) return;
-      items.sort((a, b) => String(a.b || '').localeCompare(String(b.b || '')));
+      // Render shortcuts in their stored order (the shortcut id array) so they
+      // can be drag-reordered in MOVE mode; new ones are appended at the end.
       items.forEach(item => {
         rows.push(Object.assign({}, item, {
           sectionType: 'secondary',
@@ -6101,7 +6102,7 @@ function appendLineEditorRow_(list, line, opts){
           ? `<select data-field="h" data-base-allow="${baseAllow2 ? '1' : '0'}" ${canEdit2 ? '' : 'disabled'}>${makeInUseOptions_(item.h)}</select>`
           : `<input type="text" ${numAttrs} data-field="h" data-base-allow="${baseAllow2 ? '1' : '0'}" value="${escapeHtml(item.h)}" ${canEdit2 ? "" : "disabled"} />`;
         out += `
-          <div class="itemRow ${zebraClass}${isArchived ? ' archived' : ''}${isBehindBarSection && allow1 && !isArchived ? ' behindBarDragRow' : ''}" data-id="${idEsc}" data-section-label="${escapeHtml(currentSectionLabel)}" data-section-key="${escapeHtml(currentSectionKey)}" data-section-type="${escapeHtml(item.sectionType || 'home')}"${isArchived ? ' data-archived="1"' : ''} title="${escapeHtml(item.b)} (ID ${idEsc})">
+          <div class="itemRow ${zebraClass}${isArchived ? ' archived' : ''}${isBehindBarSection && allow1 && !isArchived ? ' behindBarDragRow' : ''}" data-id="${idEsc}" data-section-label="${escapeHtml(currentSectionLabel)}" data-section-key="${escapeHtml(currentSectionKey)}" data-section-type="${escapeHtml(item.sectionType || 'home')}"${item.isShortcut ? ' data-shortcut="1"' : ''}${isArchived ? ' data-archived="1"' : ''} title="${escapeHtml(item.b)} (ID ${idEsc})">
             <button class="itemEditBtn" type="button" title="Edit item" aria-label="Edit item" data-item-id="${idEsc}" data-btn-key="item-edit" data-btn-rename="1" data-btn-icon="1" data-btn-default="Edit item">
               <svg class="editIcon" viewBox="0 0 24 24" stroke-width="1.5" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                 <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
@@ -7050,7 +7051,10 @@ function buildLeftNav_(){
     const next = Math.max(0, Math.round((current + step) * 1000000) / 1000000);
     input.value = String(next);
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.focus({ preventScroll: true });
+    // Keep this field selected so further +/- presses keep adjusting it, but do
+    // NOT focus the input: focusing a numeric input pops the on-screen keypad on
+    // touch devices, which the +/- buttons are meant to avoid.
+    rememberSelectedItemField_(input);
     input.scrollIntoView({ behavior:'smooth', block:'nearest' });
     updateSelectedFieldAdjustButtons_();
   }
@@ -7209,9 +7213,11 @@ function buildLeftNav_(){
       type = 'line';
       sourceEl = lineRow;
     } else if (itemRow) {
-      // Secondary rows are draggable only inside a reorderable secondary section
-      // (not shortcuts pinned into home sections, not the dynamic groups).
+      // Secondary rows are draggable inside a reorderable secondary section or
+      // when they are shortcuts pinned via the search bar (reordered in place);
+      // the auto-sorted dynamic groups stay non-draggable.
       if (itemRow.getAttribute('data-section-type') === 'secondary' &&
+          itemRow.getAttribute('data-shortcut') !== '1' &&
           !isReorderableSecondarySection_(itemRow.getAttribute('data-section-key') || '')) return;
       type = 'item';
       sourceEl = itemRow;
@@ -7307,10 +7313,18 @@ function buildLeftNav_(){
     const row = hit.closest('.itemRow[data-id]');
     if (row && row !== sourceEl) {
       if (row.getAttribute('data-section-type') === 'secondary') {
-        // Allow only reordering within the same reorderable secondary section.
         const rKey = row.getAttribute('data-section-key') || '';
         const sKey = sourceEl ? (sourceEl.getAttribute('data-section-key') || '') : '';
-        if (!isReorderableSecondarySection_(rKey) || norm_(rKey) !== norm_(sKey)) return null;
+        const sameKey = norm_(rKey) === norm_(sKey);
+        const bothShortcuts = row.getAttribute('data-shortcut') === '1' &&
+                              sourceEl?.getAttribute('data-shortcut') === '1';
+        if (bothShortcuts) {
+          // Reorder pinned (search-added) shortcuts within the same section.
+          if (!sameKey) return null;
+        } else if (!isReorderableSecondarySection_(rKey) || !sameKey) {
+          // Otherwise only reorder within the same reorderable secondary section.
+          return null;
+        }
       }
       const rect = row.getBoundingClientRect();
       const before = clientY < rect.top + rect.height / 2;
@@ -7562,12 +7576,40 @@ function buildLeftNav_(){
       })
       .saveUiSettings(uiSettings);
   }
+  function reorderShortcutItem_(sectionKey, sourceId, targetId, position){
+    const key = String(sectionKey || '').trim();
+    const sid = String(sourceId || '').trim();
+    const tid = String(targetId || '').trim();
+    if (!key || !sid || !tid || sid === tid) return;
+    const map = Object.assign({}, sectionShortcuts || {});
+    let ids = Array.isArray(map[key])
+      ? map[key].map(v => String(v || '').trim()).filter(Boolean)
+      : [];
+    if (!ids.includes(sid) || !ids.includes(tid)) return;
+    ids = ids.filter(x => x !== sid);
+    const idx = ids.indexOf(tid);
+    if (idx === -1) return;
+    ids.splice(position === 'after' ? idx + 1 : idx, 0, sid);
+    map[key] = ids;
+    syncShortcutsFromMap_(map);
+    rebuildAllRows_();
+    applyFilter();
+    setSavePill("saving", "Saving…");
+    google.script.run
+      .withSuccessHandler(() => { setSavePill("ok", "Saved"); })
+      .withFailureHandler(err => {
+        setSavePill("err", "Error");
+        setBanner("error", "Reorder save error: " + (err && err.message ? err.message : err));
+      })
+      .saveUiSettings(uiSettings);
+  }
   function performLayoutItemDrop_(drop, sourceEl){
     const sourceId = sourceEl?.getAttribute('data-id') || '';
     if (!sourceId) return;
     const sourceSection = sourceEl?.getAttribute('data-section-label') || '';
     const sourceSectionKey = sourceEl?.getAttribute('data-section-key') || '';
     const sourceIsDistributor = isDistributorSectionKey_(sourceSectionKey);
+    const sourceIsShortcut = sourceEl?.getAttribute('data-shortcut') === '1';
     if (drop.kind === 'item') {
       const targetRow = drop.targetRow;
       const targetId = targetRow?.getAttribute('data-id') || '';
@@ -7575,6 +7617,18 @@ function buildLeftNav_(){
       const targetSectionKey = targetRow?.getAttribute('data-section-key') || '';
       const targetIsDistributor = isDistributorSectionKey_(targetSectionKey);
       if (!targetId || targetId === sourceId) return;
+      // Reorder pinned shortcut rows (added via the search bar) within their
+      // section. Must come before the generic same-section reorder, which would
+      // otherwise reorder the underlying base item order instead.
+      if (sourceIsShortcut &&
+          targetRow?.getAttribute('data-shortcut') === '1' &&
+          norm_(sourceSectionKey) === norm_(targetSectionKey)) {
+        reorderShortcutItem_(sourceSectionKey, sourceId, targetId, drop.position);
+        return;
+      }
+      // A shortcut is a secondary appearance; never relocate the underlying
+      // item from other drop targets — only the reorder above applies.
+      if (sourceIsShortcut) return;
       // Reorder within a secondary/location section (stored item order).
       if (sourceEl?.getAttribute('data-section-type') === 'secondary' &&
           targetRow?.getAttribute('data-section-type') === 'secondary' &&
@@ -7600,6 +7654,7 @@ function buildLeftNav_(){
       return;
     }
     if (drop.kind === 'section') {
+      if (sourceIsShortcut) return;
       const sectionKey = String(drop.sectionKey || '').trim();
       const targetSection = findSectionLabelByKey_(sectionKey);
       if (!targetSection) return;
