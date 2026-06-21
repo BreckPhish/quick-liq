@@ -2,9 +2,17 @@
  * A_Migrate.gs — one-time importer from a legacy v1 spreadsheet into the v2 tables.
  *
  * v2 lives in its own (new) spreadsheet. This reads the OLD spreadsheet by id and
- * populates the normalized v2 tables in the active spreadsheet. Run setup() first.
+ * populates the normalized v2 tables in the active spreadsheet.
  *
- *   migrateFromV1('OLD_SPREADSHEET_ID')   // from the Apps Script editor
+ * Run it from the in-app Settings → Data → "Run migration" (the settings PIN unlocks it).
+ * To run from the Apps Script editor instead, the migration is gated by the settings PIN,
+ * so verify once first:
+ *
+ *   verifySettingsPin('YOUR_SETTINGS_PIN');   // grants a short-lived unlock token
+ *   migrateFromV1('OLD_SPREADSHEET_ID');       // setupCore_() runs automatically
+ *
+ * Re-running is safe: Items/Counts/SectionItems are replaced (not appended), and
+ * Sections/Groups/Recipes are written by key (insert-if-absent / upsert).
  *
  * Faithful where it matters (items, counts, sections, membership, groups, recipes,
  * vendors, archived). Intentional simplifications:

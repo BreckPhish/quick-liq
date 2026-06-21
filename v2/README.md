@@ -162,6 +162,8 @@ v2/
 - **Migration ✅:** `A_Migrate.gs` — `migrateFromV1('OLD_SPREADSHEET_ID')` imports legacy
   items, counts (G/H/J→locations), sections + membership, shortcuts/secondary sections,
   groups, batch recipes, vendors, and archived flags into the v2 tables (preserves item ids).
+  Run it from **Settings → Data → Run migration** (the settings PIN gates it); to run from the
+  Apps Script editor, call `verifySettingsPin('PIN')` first. Idempotent — safe to re-run.
 - **Phase 4 ✅:** PIN-gated **Settings** page — access config (PINs, allowed domains),
   appearance (company/portal names), full **data backup/restore** (JSON export/import),
   an in-app **v1 migration runner**, and list management (locations/categories/vendors/
