@@ -1,0 +1,158 @@
+<script>
+/* ===========================================================================
+ * Client_Render — sections/groups/rows, search filter, recipe summary.
+ * Rendering is pure-ish: it reads State and writes HTML, then Counting wires inputs.
+ * =========================================================================== */
+
+function esc_(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function locationLabelsHtml_() {
+  return State.locations.map(function (l) {
+    return '<div class="colLabel">' + esc_(l.name) + '</div>';
+  }).join('');
+}
+
+function itemMatches_(itemId, q) {
+  const it = State.itemsById[String(itemId)];
+  if (!it) return false;
+  if (!q) return true;
+  return String(it.commonName || '').toLowerCase().indexOf(q) !== -1;
+}
+
+function rowHtml_(itemId, zebra) {
+  const it = State.itemsById[String(itemId)];
+  if (!it) return '';
+  const counts = State.counts[String(itemId)] || {};
+  const batch = Number(State.batch[String(itemId)]) || 0;
+  const batchChip = batch > 0
+    ? '<span class="batchChip" title="Bottles tied up in batch recipes">+' + (Math.round(batch * 10) / 10).toFixed(1) + ' batch</span>'
+    : '';
+  let cells = '';
+  State.locations.forEach(function (loc) {
+    const v = counts[String(loc.id)];
+    cells += '<div class="cell"><input type="text" inputmode="decimal" '
+      + 'data-item-id="' + esc_(itemId) + '" data-loc-id="' + esc_(loc.id) + '" '
+      + 'value="' + esc_(v == null ? '' : v) + '"></div>';
+  });
+  return '<div class="itemRow' + (zebra ? ' zebra' : '') + (it.archived ? ' archived' : '') + '" '
+    + 'data-item-id="' + esc_(itemId) + '">'
+    + '<div class="itemName" title="' + esc_(it.commonName) + '">' + esc_(it.commonName) + batchChip + '</div>'
+    + cells + '</div>';
+}
+
+function sectionHtml_(sec, q) {
+  const ids = (State.sectionItems[String(sec.id)] || []).filter(function (id) { return itemMatches_(id, q); });
+  if (q && !ids.length) return '';
+  const collapsed = !!State.collapsed[sec.id] && !q;
+  let body = '';
+  ids.forEach(function (id, i) { body += rowHtml_(id, i % 2 === 1); });
+  return '<div class="group section' + (collapsed ? ' collapsed' : '') + '" data-section-id="' + esc_(sec.id) + '">'
+    + '<div class="gName"><span class="chev">▾</span> ' + esc_(sec.name) + '</div>'
+    + '<div class="groupLabels">' + locationLabelsHtml_() + '</div>'
+    + '<div class="gCount">' + ids.length + '</div>'
+    + '</div>'
+    + '<div class="sectionBody' + (collapsed ? ' collapsed' : '') + '" data-section-body="' + esc_(sec.id) + '">'
+    + (body || '<div class="muted" style="padding:8px 4px;font-size:12px;">No items.</div>')
+    + '</div>';
+}
+
+function renderRows_() {
+  const q = (document.getElementById('search').value || '').trim().toLowerCase();
+  const rowsEl = document.getElementById('rows');
+
+  // Group sections by groupId; render grouped first (in group order), then ungrouped.
+  const sectionsByGroup = {};
+  const ungrouped = [];
+  State.sections.forEach(function (sec) {
+    if (sec.groupId) (sectionsByGroup[String(sec.groupId)] || (sectionsByGroup[String(sec.groupId)] = [])).push(sec);
+    else ungrouped.push(sec);
+  });
+
+  let html = '';
+  State.groups.forEach(function (g) {
+    const secs = sectionsByGroup[String(g.id)] || [];
+    const inner = secs.map(function (s) { return sectionHtml_(s, q); }).join('');
+    if (!inner.trim()) return;
+    html += '<div class="groupDivider muted" style="margin:18px 0 4px;font-weight:900;letter-spacing:.4px;">'
+      + esc_(g.name) + '</div>' + inner;
+  });
+  ungrouped.forEach(function (s) { html += sectionHtml_(s, q); });
+
+  rowsEl.innerHTML = html || '<div class="muted">No items.</div>';
+  setStatus_();
+  wireSectionToggles_();
+  wireCountInputs_();
+  fitNames_();
+}
+
+function setStatus_() {
+  const itemCount = Object.keys(State.itemsById).length;
+  document.getElementById('status').textContent =
+    'Loaded ' + itemCount + ' items across ' + State.sections.length + ' sections.';
+}
+
+/* ---- Section collapse ---- */
+function wireSectionToggles_() {
+  document.querySelectorAll('#rows .group.section').forEach(function (header) {
+    header.addEventListener('click', function (e) {
+      if (e.target.closest('input')) return;
+      const id = header.dataset.sectionId;
+      State.collapsed[id] = !State.collapsed[id];
+      saveCollapsed_();
+      header.classList.toggle('collapsed', !!State.collapsed[id]);
+      const body = document.querySelector('.sectionBody[data-section-body="' + cssEscape_(id) + '"]');
+      if (body) body.classList.toggle('collapsed', !!State.collapsed[id]);
+    });
+  });
+}
+
+function cssEscape_(s) {
+  return (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/["\\]/g, '\\$&');
+}
+
+/* ---- Item-name auto-fit (single line) ---- */
+function fitNames_() {
+  const names = document.querySelectorAll('#rows .itemName');
+  names.forEach(function (el) { el.style.fontSize = ''; });
+  names.forEach(function (el) {
+    const cw = el.clientWidth, sw = el.scrollWidth;
+    if (cw > 0 && sw > cw + 1) {
+      const size = Math.max(8, Math.floor(14 * (cw / sw) * 0.96 * 100) / 100);
+      el.style.fontSize = size + 'px';
+    }
+  });
+}
+
+/* ---- Recipe summary (phase-1 read-only list) ---- */
+function renderRecipeList_() {
+  const el = document.getElementById('recipeList');
+  if (!el) return;
+  if (!State.recipes.length) { el.innerHTML = '<div class="muted">No batch recipes yet.</div>'; return; }
+  el.innerHTML = State.recipes.map(function (r) {
+    const ing = (r.ingredients || []).length;
+    return '<div class="recipeCard">'
+      + '<div class="rName">' + esc_(r.name) + '</div>'
+      + '<div class="rMeta">' + (Math.round((Number(r.bottleCount) || 0) * 10) / 10).toFixed(1)
+      + ' bottles on hand · ' + ing + ' ingredient' + (ing === 1 ? '' : 's') + '</div>'
+      + '</div>';
+  }).join('');
+}
+
+/* ---- Search ---- */
+(function () {
+  let t = null;
+  document.addEventListener('DOMContentLoaded', function () {
+    document.getElementById('search').addEventListener('input', function () {
+      clearTimeout(t); t = setTimeout(renderRows_, 140);
+    });
+    document.getElementById('clearSearch').addEventListener('click', function () {
+      document.getElementById('search').value = ''; renderRows_();
+    });
+    window.addEventListener('resize', fitNames_);
+  });
+})();
+</script>

@@ -1,0 +1,117 @@
+<script>
+/* ===========================================================================
+ * Client_Counting — count input wiring, autosave with an offline queue, and the
+ * bottom-bar +/- adjust. Edits update the in-memory model immediately (so re-renders
+ * keep the value) and are flushed to the server with retry/backoff.
+ * =========================================================================== */
+
+const FLUSH_DEBOUNCE_MS = 600;
+let flushRetryDelay = 4000;
+const FLUSH_RETRY_MAX = 60000;
+
+function pendKey_(itemId, locId) { return String(itemId) + '|' + String(locId); }
+
+function loadPending_() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LS_PENDING) || '[]') || [];
+    raw.forEach(function (e) { State.pending.set(pendKey_(e.itemId, e.locationId), e); });
+  } catch (e) {}
+  updatePendingPill_();
+}
+function persistPending_() {
+  try {
+    localStorage.setItem(LS_PENDING, JSON.stringify(Array.from(State.pending.values())));
+  } catch (e) {}
+}
+function updatePendingPill_() {
+  if (State.pending.size > 0) setPill('pending', State.pending.size + ' unsaved');
+  else if (!State.flushInFlight) setPill('ok', 'Saved');
+}
+
+/** Record a single count edit: update model + queue + schedule flush. */
+function recordEdit_(itemId, locId, value) {
+  const id = String(itemId), loc = String(locId);
+  if (!State.counts[id]) State.counts[id] = {};
+  const trimmed = String(value == null ? '' : value).trim();
+  const num = trimmed === '' ? 0 : parseFloat(trimmed);
+  const qty = Number.isFinite(num) ? num : 0;
+  if (qty === 0) delete State.counts[id][loc]; else State.counts[id][loc] = qty;
+
+  State.pending.set(pendKey_(id, loc), { itemId: id, locationId: loc, qty: qty });
+  persistPending_();
+  updatePendingPill_();
+  scheduleFlush_();
+}
+
+function scheduleFlush_() {
+  clearTimeout(State.flushTimer);
+  State.flushTimer = setTimeout(flushPending_, FLUSH_DEBOUNCE_MS);
+}
+
+function flushPending_() {
+  if (State.flushInFlight || State.pending.size === 0) return;
+  State.flushInFlight = true;
+  setPill('pending', 'Saving…');
+  const batch = Array.from(State.pending.values());
+  call_('saveCounts', [batch]).then(function () {
+    // Remove exactly what we sent (new edits during flight stay queued).
+    batch.forEach(function (e) {
+      const k = pendKey_(e.itemId, e.locationId);
+      const cur = State.pending.get(k);
+      if (cur && cur.qty === e.qty) State.pending.delete(k);
+    });
+    persistPending_();
+    State.flushInFlight = false;
+    flushRetryDelay = 4000;
+    if (State.pending.size > 0) scheduleFlush_(); else updatePendingPill_();
+  }).catch(function (e) {
+    State.flushInFlight = false;
+    setPill('err', 'Retrying…');
+    setBanner('warn', 'Save failed, will retry: ' + (e && e.message ? e.message : e));
+    setTimeout(function () { setBanner(null); }, 4000);
+    setTimeout(flushPending_, flushRetryDelay);
+    flushRetryDelay = Math.min(FLUSH_RETRY_MAX, flushRetryDelay * 2);
+  });
+}
+
+/** Manual save (pill click style hook, optional). */
+function quickSave_() { flushPending_(); }
+
+/* ---- Wire inputs after each render ---- */
+function wireCountInputs_() {
+  document.querySelectorAll('#rows input[data-item-id]').forEach(function (input) {
+    input.addEventListener('input', function () {
+      recordEdit_(input.dataset.itemId, input.dataset.locId, input.value);
+    });
+    input.addEventListener('focus', function () {
+      State.selected = { itemId: input.dataset.itemId, locationId: input.dataset.locId, input: input };
+      updateAdjustButtons_();
+    });
+  });
+  updateAdjustButtons_();
+}
+
+/* ---- Bottom-bar +/- adjust (no .focus(), so the keypad never pops) ---- */
+function updateAdjustButtons_() {
+  const enabled = !!(State.selected && State.selected.input && document.contains(State.selected.input));
+  document.getElementById('decBtn').disabled = !enabled;
+  document.getElementById('incBtn').disabled = !enabled;
+}
+
+function adjust_(dir) {
+  const sel = State.selected;
+  if (!sel || !sel.input || !document.contains(sel.input)) { updateAdjustButtons_(); return; }
+  const cur = parseFloat(sel.input.value || '0');
+  const base = Number.isFinite(cur) ? cur : 0;
+  const next = Math.max(0, Math.round((base + (dir < 0 ? -1 : 1)) * 1e6) / 1e6);
+  sel.input.value = String(next);
+  recordEdit_(sel.itemId, sel.locationId, String(next));
+  sel.input.scrollIntoView({ block: 'nearest' });
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  document.getElementById('decBtn').addEventListener('click', function () { adjust_(-1); });
+  document.getElementById('incBtn').addEventListener('click', function () { adjust_(1); });
+  document.getElementById('savePill').addEventListener('click', quickSave_);
+});
+</script>

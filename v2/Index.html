@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>TIN PLATE — INVENT</title>
+  <?!= include('Styles'); ?>
+</head>
+<body class="locked">
+
+  <!-- Launch PIN gate -->
+  <div id="launchOverlay" class="overlay launchOverlay" role="dialog" aria-modal="true" aria-labelledby="launchTitle">
+    <div class="modal launchModal">
+      <h2 id="launchTitle">APP ACCESS</h2>
+      <p class="muted">Enter the access PIN to continue.</p>
+      <input id="launchPin" class="pinInput" type="password" inputmode="numeric"
+             autocomplete="one-time-code" placeholder="••••" aria-label="Access PIN">
+      <div id="launchError" class="errorText" role="alert" aria-live="assertive"></div>
+      <button id="launchSubmit" class="btn primary" type="button">Unlock</button>
+    </div>
+  </div>
+
+  <!-- App -->
+  <header>
+    <div class="headerBar">
+      <div class="headerTitle">
+        <div class="companyName" id="companyName">TIN PLATE HOSPITALITY GROUP, LLC</div>
+        <div class="portalName" id="portalName">BEVERAGE MANAGEMENT PORTAL</div>
+      </div>
+      <div id="savePill" class="pill" role="status" aria-live="polite">Idle</div>
+    </div>
+    <div class="headerRow">
+      <nav class="pageTabs" aria-label="Pages">
+        <button class="pageTabBtn active" type="button" data-page="inventory">Inventory</button>
+        <button class="pageTabBtn" type="button" data-page="recipes">Batch Recipes</button>
+        <button class="pageTabBtn" type="button" data-page="settings">Settings</button>
+      </nav>
+      <div class="metaFields">
+        <label class="metaField">Last counted
+          <input id="metaDate" type="date">
+        </label>
+        <label class="metaField">Initials
+          <input id="metaInitials" maxlength="3" autocapitalize="characters" placeholder="ABC">
+        </label>
+      </div>
+    </div>
+    <div id="banner" class="banner" hidden></div>
+  </header>
+
+  <!-- Inventory page -->
+  <main id="pageInventory" class="page active">
+    <div class="wrap">
+      <div id="rows" class="rows" aria-live="polite"></div>
+      <div id="status" class="status"></div>
+    </div>
+    <div class="bottomBar">
+      <div class="adjustControls" aria-label="Adjust selected field">
+        <button id="decBtn" class="btn adjustBtn" type="button" disabled aria-label="Decrease selected field">&minus;</button>
+        <button id="incBtn" class="btn adjustBtn" type="button" disabled aria-label="Increase selected field">+</button>
+      </div>
+      <input id="search" class="searchInput" type="search" placeholder="Search items…" aria-label="Search items">
+      <button id="clearSearch" class="btn" type="button">Clear</button>
+    </div>
+  </main>
+
+  <!-- Recipes page (phase 2 editor; phase 1 shows summary) -->
+  <main id="pageRecipes" class="page">
+    <div class="wrap">
+      <h2 class="pageHeading">Batch Cocktail Recipes</h2>
+      <p class="muted">Each recipe's on-hand batch bottles are converted to bottles of each base
+        liquor and folded into your counts. Full editor arrives in the next phase.</p>
+      <div id="recipeList" class="recipeList"></div>
+    </div>
+  </main>
+
+  <!-- Settings page -->
+  <main id="pageSettings" class="page">
+    <div class="wrap">
+      <h2 class="pageHeading">Settings</h2>
+      <div id="settingsBody" class="settingsBody muted">Enter the settings PIN to manage configuration.</div>
+    </div>
+  </main>
+
+  <?!= include('Client_Core'); ?>
+  <?!= include('Client_Render'); ?>
+  <?!= include('Client_Counting'); ?>
+</body>
+</html>
