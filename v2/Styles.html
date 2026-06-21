@@ -197,6 +197,16 @@
     .fieldRow{ flex-direction:column; }
   }
 
+  /* ---- Move (drag-reorder) mode ---- */
+  body.moveMode .itemRow{ cursor:grab; touch-action:none; }
+  body.moveMode .group.section{ cursor:grab; touch-action:none; }
+  body.moveMode .cell input{ pointer-events:none; }
+  body.moveMode .itemName{ cursor:grab; }
+  .moveSource{ opacity:0.55; }
+  .dropMark.dropBefore{ box-shadow: inset 0 3px 0 0 var(--accent); }
+  .dropMark.dropAfter{ box-shadow: inset 0 -3px 0 0 var(--accent); }
+  #moveToggle.primary{ background:var(--accentSoft); border-color:var(--accent); }
+
   /* ---- Settings ---- */
   .settingsBody{ display:grid; gap:14px; }
   .settingsCard{ background:var(--card); border:1px solid var(--border); border-radius:14px; padding:14px 16px; }

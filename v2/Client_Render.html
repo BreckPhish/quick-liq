@@ -105,6 +105,7 @@ function renderRows_() {
 function wireItemNames_() {
   document.querySelectorAll('#rows .itemName').forEach(function (el) {
     el.addEventListener('click', function (e) {
+      if (State.moveMode) return;
       e.stopPropagation();
       const row = el.closest('.itemRow[data-item-id]');
       if (row && typeof openItemEditor_ === 'function') openItemEditor_(row.dataset.itemId);
@@ -122,6 +123,7 @@ function setStatus_() {
 function wireSectionToggles_() {
   document.querySelectorAll('#rows .group.section').forEach(function (header) {
     header.addEventListener('click', function (e) {
+      if (State.moveMode) return;
       if (e.target.closest('input')) return;
       const id = header.dataset.sectionId;
       State.collapsed[id] = !State.collapsed[id];

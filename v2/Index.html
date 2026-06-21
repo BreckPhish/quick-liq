@@ -57,7 +57,8 @@
     <div class="wrap">
       <div class="invToolbar">
         <button id="addItemBtn" class="btn primary" type="button">+ Add item</button>
-        <span class="muted invHint">Tap an item's name to edit it.</span>
+        <button id="moveToggle" class="btn" type="button">Move</button>
+        <span class="muted invHint">Tap a name to edit. Turn on <strong>Move</strong> to drag-reorder.</span>
       </div>
       <div id="rows" class="rows" aria-live="polite"></div>
       <div id="status" class="status"></div>
@@ -209,5 +210,6 @@
   <?!= include('Client_Items'); ?>
   <?!= include('Client_Reports'); ?>
   <?!= include('Client_Settings'); ?>
+  <?!= include('Client_Move'); ?>
 </body>
 </html>

@@ -176,7 +176,8 @@ v2/
 ## Status
 
 Phases 1–4 are complete: this is a working, end-to-end beverage-inventory app on a clean
-normalized backend — counting, item management, batch recipes, computed order guide,
+normalized backend — counting, item management, **Move-mode drag-reorder** (items within/
+between sections + section reordering, mouse & touch), batch recipes, computed order guide,
 PDF/email reports, settings, backup/restore, and v1 migration. Deploy steps below.
 
 ## Deploy
