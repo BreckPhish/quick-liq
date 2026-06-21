@@ -25,7 +25,11 @@ function migrateFromV1(sourceSpreadsheetId) {
   if (!sourceSpreadsheetId) throw new Error('Pass the legacy spreadsheet id.');
   return withLock_(function () {
     assertAccess_(); // same gate as every other endpoint
+    assertSettingsUnlocked_(); // migration is a privileged, destructive action
     setupCore_(); // ensure v2 tables exist + defaults seeded (lock-free: we already hold the lock)
+    // Idempotent: re-running replaces the bulk-appended tables instead of duplicating rows.
+    // (Sections/Groups/Recipes are written via key-guarded insert/upsert, so they're already safe.)
+    [SHEETS.ITEMS, SHEETS.COUNTS, SHEETS.SECTION_ITEMS].forEach(clearTableData_);
     const src = SpreadsheetApp.openById(sourceSpreadsheetId);
 
     const summary = { items: 0, counts: 0, sections: 0, sectionItems: 0, groups: 0, recipes: 0, vendors: 0, archived: 0 };

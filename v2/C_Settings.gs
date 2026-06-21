@@ -20,6 +20,7 @@ function assertListSheet_(sheetName) {
 function getSettings() {
   return api_(function () {
     assertAccess_();
+    assertSettingsUnlocked_();
     const s = new SettingsRepo();
     return {
       uiText: s.get(SETTING_KEYS.UI_TEXT) || DEFAULTS.UI_TEXT,
@@ -42,6 +43,7 @@ function getSettings() {
 function saveAppSettings(payload) {
   return api_(function () {
     assertAccess_();
+    assertSettingsUnlocked_();
     return withLock_(function () {
       const s = new SettingsRepo();
       payload = payload || {};
@@ -65,6 +67,7 @@ function saveAppSettings(payload) {
 function upsertListItem(sheetName, record) {
   return api_(function () {
     assertAccess_();
+    assertSettingsUnlocked_();
     assertListSheet_(sheetName);
     return withLock_(function () {
       const repo = new TableRepo(sheetName, 'id');
@@ -85,6 +88,7 @@ function upsertListItem(sheetName, record) {
 function deleteListItem(sheetName, id) {
   return api_(function () {
     assertAccess_();
+    assertSettingsUnlocked_();
     assertListSheet_(sheetName);
     return withLock_(function () {
       let reassigned = 0;
@@ -112,6 +116,7 @@ function reassignItemRefs_(field, fromId) {
 function reorderListItems(sheetName, ids) {
   return api_(function () {
     assertAccess_();
+    assertSettingsUnlocked_();
     assertListSheet_(sheetName);
     return withLock_(function () {
       const repo = new TableRepo(sheetName, 'id');
@@ -126,6 +131,7 @@ function reorderListItems(sheetName, ids) {
 function exportData() {
   return api_(function () {
     assertAccess_();
+    assertSettingsUnlocked_();
     const tables = {};
     Object.keys(TABLE_COLUMNS).forEach(function (name) { tables[name] = new TableRepo(name).all(); });
     return {
@@ -139,16 +145,36 @@ function exportData() {
 function importData(payload) {
   return api_(function () {
     assertAccess_();
+    assertSettingsUnlocked_();
     return withLock_(function () {
       if (!payload || !payload.tables) throw new Error('Invalid backup payload.');
-      let restored = 0;
-      Object.keys(TABLE_COLUMNS).forEach(function (name) {
-        const rows = payload.tables[name];
-        if (!Array.isArray(rows)) return;
-        clearTableData_(name);
-        if (rows.length) new TableRepo(name).insertMany(rows);
-        restored += rows.length;
+      // Validate everything BEFORE touching any sheet: a provided table must be an array.
+      Object.keys(payload.tables).forEach(function (name) {
+        if (TABLE_COLUMNS[name] && !Array.isArray(payload.tables[name])) {
+          throw new Error('Invalid backup: "' + name + '" is not a list of rows.');
+        }
       });
+      const names = Object.keys(TABLE_COLUMNS).filter(function (n) { return Array.isArray(payload.tables[n]); });
+      // Snapshot the tables we're about to replace so we can roll back on failure.
+      const snapshot = {};
+      names.forEach(function (n) { snapshot[n] = new TableRepo(n).all(); });
+
+      let restored = 0;
+      try {
+        names.forEach(function (name) {
+          const rows = payload.tables[name];
+          clearTableData_(name);
+          if (rows.length) new TableRepo(name).insertMany(rows);
+          restored += rows.length;
+        });
+      } catch (e) {
+        // Best-effort rollback to the pre-import state, then surface the failure.
+        names.forEach(function (name) {
+          clearTableData_(name);
+          if (snapshot[name] && snapshot[name].length) new TableRepo(name).insertMany(snapshot[name]);
+        });
+        throw new Error('Import failed and was rolled back: ' + (e && e.message ? e.message : e));
+      }
       return { ok: true, restored: restored };
     });
   });

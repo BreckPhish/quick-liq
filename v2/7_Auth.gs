@@ -25,11 +25,27 @@ function verifyLaunchPin(pin) {
   return { ok: String(pin || '').trim() === String(expected == null ? '' : expected).trim() };
 }
 
+/** Settings unlock token (server-side gate so privileged endpoints can't be called directly). */
+const SETTINGS_UNLOCK_TTL_MS = 60 * 60 * 1000; // 1 hour
+const PROP_SETTINGS_UNLOCK = 'V2_SETTINGS_UNLOCK_UNTIL';
+
 /** Verify the settings PIN (admin actions). The launch PIN also unlocks settings. */
 function verifySettingsPin(pin) {
   const settings = new SettingsRepo();
   const settingsPin = String(settings.get(SETTING_KEYS.ACCESS_SETTINGS_PIN) || '').trim();
   const launchPin = String(settings.get(SETTING_KEYS.ACCESS_LAUNCH_PIN) || '').trim();
   const given = String(pin || '').trim();
-  return { ok: given === settingsPin || given === launchPin };
+  const ok = !!given && (given === settingsPin || given === launchPin);
+  if (ok) {
+    PropertiesService.getUserProperties()
+      .setProperty(PROP_SETTINGS_UNLOCK, String(Date.now() + SETTINGS_UNLOCK_TTL_MS));
+  }
+  return { ok: ok };
+}
+
+/** Throw unless the settings PIN was verified recently (within the TTL) by this user. */
+function assertSettingsUnlocked_() {
+  let until = 0;
+  try { until = num_(PropertiesService.getUserProperties().getProperty(PROP_SETTINGS_UNLOCK), 0); } catch (e) { until = 0; }
+  if (!until || Date.now() > until) throw new Error('Settings PIN verification required.');
 }
