@@ -77,6 +77,36 @@ function flushPending_() {
 /** Manual save (pill click style hook, optional). */
 function quickSave_() { flushPending_(); }
 
+/**
+ * Flush all pending counts and resolve only once the server has them (or reject on error).
+ * Use before generating reports so output reflects the latest numbers. Waits out any
+ * in-flight debounced flush, and re-flushes edits that arrive mid-save.
+ */
+function flushNowAsync_() {
+  clearTimeout(State.flushTimer);
+  if (State.flushInFlight) {
+    return new Promise(function (res) { setTimeout(res, 250); }).then(flushNowAsync_);
+  }
+  if (State.pending.size === 0) return Promise.resolve();
+  State.flushInFlight = true;
+  setPill('pending', 'Saving…');
+  const batch = Array.from(State.pending.values());
+  return call_('saveCounts', [batch]).then(function () {
+    batch.forEach(function (e) {
+      const k = pendKey_(e.itemId, e.locationId);
+      const cur = State.pending.get(k);
+      if (cur && cur.qty === e.qty) State.pending.delete(k);
+    });
+    persistPending_();
+    State.flushInFlight = false;
+    updatePendingPill_();
+    if (State.pending.size > 0) return flushNowAsync_();
+  }).catch(function (e) {
+    State.flushInFlight = false;
+    throw e;
+  });
+}
+
 /* ---- Wire inputs after each render ---- */
 function wireCountInputs_() {
   document.querySelectorAll('#rows input[data-item-id]').forEach(function (input) {

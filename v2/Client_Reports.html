@@ -17,13 +17,12 @@ function downloadBase64_(b64, mime, name) {
   setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
 }
 
-/** Ensure server has the latest counts before generating a report. */
+/** Ensure the server has the latest counts before generating a report. */
 function withFlushed_(fn) {
-  if (State.pending.size === 0) { fn(); return; }
-  setPill('pending', 'Saving…');
-  flushPending_();
-  // small delay to let the flush land; flush is debounced/awaited best-effort
-  setTimeout(fn, 700);
+  flushNowAsync_().then(fn).catch(function (e) {
+    setPill('err', 'Error');
+    document.getElementById('rpError').textContent = 'Could not save counts before report: ' + (e && e.message ? e.message : e);
+  });
 }
 
 function downloadReport_(kind) {

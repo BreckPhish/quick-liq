@@ -61,10 +61,9 @@ class CountsRepo extends TableRepo {
 
   /** Set (or clear) one item/location count. Empty/0 qty removes the row. */
   setQty(itemId, locationId, qty) {
-    const key = String(itemId) + String(locationId);
     const value = num_(qty, NaN);
     if (!Number.isFinite(value) || value === 0) {
-      this.remove(key);
+      this.remove(this.keyOf({ itemId: String(itemId), locationId: String(locationId) }));
       return { itemId, locationId, qty: 0 };
     }
     const row = { itemId: String(itemId), locationId: String(locationId), qty: value, updatedAt: nowIso_() };

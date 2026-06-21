@@ -176,7 +176,8 @@ function removeItemFromSection(sectionId, itemId) {
   return api_(function () {
     assertAccess_();
     return withLock_(function () {
-      const removed = new SectionItemsRepo().remove(String(sectionId) + String(itemId));
+      const repo = new SectionItemsRepo();
+      const removed = repo.remove(repo.keyOf({ sectionId: String(sectionId), itemId: String(itemId) }));
       return { removed };
     });
   });

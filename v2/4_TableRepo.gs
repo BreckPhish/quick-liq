@@ -20,7 +20,7 @@ class TableRepo {
   /** Build the composite/simple key string for an object. */
   keyOf(obj) {
     if (Array.isArray(this.idKey)) {
-      return this.idKey.map((k) => String(obj[k] == null ? '' : obj[k])).join('');
+      return this.idKey.map((k) => String(obj[k] == null ? '' : obj[k])).join('\u0000');
     }
     return String(obj[this.idKey] == null ? '' : obj[this.idKey]);
   }

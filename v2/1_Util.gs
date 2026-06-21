@@ -72,12 +72,17 @@ function acquireLock_() {
   try { lock.waitLock(APP.LOCK_WAIT_MS); return lock; } catch (e) { return null; }
 }
 
-/** Run a function while holding the lock; always releases. */
+/**
+ * Run a function while holding the lock; always releases.
+ * Aborts (throws) if no lock could be acquired within LOCK_WAIT_MS, so writes are never
+ * executed unserialized (which could race on the id counter or interleave table updates).
+ */
 function withLock_(fn) {
   const lock = acquireLock_();
+  if (!lock) throw new Error('Busy — could not acquire a lock; please try again.');
   try {
     return fn();
   } finally {
-    if (lock) { try { lock.releaseLock(); } catch (e) {} }
+    try { lock.releaseLock(); } catch (e) {}
   }
 }
