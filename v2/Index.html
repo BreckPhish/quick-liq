@@ -176,6 +176,31 @@
     </div>
   </div>
 
+  <!-- Distributor editor modal -->
+  <div id="vendorEditor" class="overlay" role="dialog" aria-modal="true" aria-labelledby="venTitle">
+    <div class="modal recipeModal">
+      <h2 id="venTitle">Distributor</h2>
+      <label class="field">Name <input id="venName" type="text" placeholder="e.g. SOUTHERN"></label>
+      <div class="fieldRow">
+        <label class="field">Ref code <input id="venRef" type="text" maxlength="4" placeholder="A"></label>
+        <label class="field toggleField"><span>Active</span><input id="venActive" type="checkbox" checked></label>
+      </div>
+      <label class="field">Rep name <input id="venRepName" type="text" placeholder="contact name"></label>
+      <div class="fieldRow">
+        <label class="field">Rep phone <input id="venRepPhone" type="tel" placeholder="(555) 555-5555"></label>
+        <label class="field">Rep email <input id="venRepEmail" type="email" placeholder="rep@example.com"></label>
+      </div>
+      <div class="field"><span class="fieldLabel">Order days</span><div id="venDays" class="dayChips"></div></div>
+      <div id="venError" class="errorText"></div>
+      <div class="modalActions">
+        <button id="venDelete" class="btn danger" type="button">Delete</button>
+        <span class="spacer"></span>
+        <button id="venCancel" class="btn" type="button">Cancel</button>
+        <button id="venSave" class="btn primary" type="button">Save</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Reports modal -->
   <div id="reportsModal" class="overlay" role="dialog" aria-modal="true" aria-labelledby="reportsTitle">
     <div class="modal recipeModal">
@@ -210,6 +235,7 @@
   <?!= include('Client_Items'); ?>
   <?!= include('Client_Reports'); ?>
   <?!= include('Client_Settings'); ?>
+  <?!= include('Client_Manage'); ?>
   <?!= include('Client_Move'); ?>
 </body>
 </html>

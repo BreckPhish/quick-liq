@@ -1,0 +1,314 @@
+<script>
+/* ===========================================================================
+ * Client_Manage — rich management UIs rendered inside the (PIN-gated) Settings
+ * page: an Items manager (all items incl. archived, with filters), a full
+ * Distributor editor (rep + order days + active), and reorderable managers for
+ * Categories / Locations / Sections / Groups. Backed by the generic
+ * upsertListItem / deleteListItem / reorderListItems endpoints.
+ * =========================================================================== */
+
+const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function truthy_(v) { return v === true || v === 1 || v === 'true' || v === 'TRUE'; }
+function parseDays_(json) {
+  try { const a = JSON.parse(json || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+}
+
+/** itemId-field → count map across all items (used for "N items" badges). */
+function itemsCountByField_(field) {
+  const m = {}, by = State.itemsById || {};
+  Object.keys(by).forEach(function (id) {
+    const k = String(by[id][field] || '');
+    m[k] = (m[k] || 0) + 1;
+  });
+  return m;
+}
+
+/* ----------------------------------------------------------------------------- *
+ *  Markup
+ * ----------------------------------------------------------------------------- */
+
+function manageMarkup_(data) {
+  const L = data.lists || {};
+  const catCounts = itemsCountByField_('categoryId');
+  return ''
+    + itemsManagerCard_()
+    + vendorsManagerCard_(L.Vendors || [])
+    + reorderableCard_('Categories', 'Categories', L.Categories || [],
+        function (c) { return (catCounts[String(c.id)] || 0) + ' items'; })
+    + reorderableCard_('Locations', 'Locations', L.Locations || [], null, { active: true })
+    + reorderableCard_('Sections', 'Sections', L.Sections || [])
+    + reorderableCard_('Groups', 'Groups', L.Groups || []);
+}
+
+function optionsFrom_(list) {
+  return (list || []).map(function (o) {
+    return '<option value="' + esc_(o.id) + '">' + esc_(o.name) + '</option>';
+  }).join('');
+}
+
+function itemsManagerCard_() {
+  const cats = (State.data && State.data.categories) || [];
+  const vendors = (State.data && State.data.vendors) || [];
+  return '<div class="settingsCard"><div class="mgrHead"><h3>Items</h3>'
+    + '<button class="btn primary" id="mItemAdd" type="button">+ Add item</button></div>'
+    + '<div class="mgrFilters">'
+    + '<input id="mItemSearch" class="mgrSearch" type="search" placeholder="Search items…">'
+    + '<select id="mItemCat"><option value="">All categories</option>' + optionsFrom_(cats) + '</select>'
+    + '<select id="mItemVendor"><option value="">All distributors</option>' + optionsFrom_(vendors) + '</select>'
+    + '<label class="toggleRow small"><input type="checkbox" id="mItemArchived"> Show archived</label>'
+    + '</div>'
+    + '<div id="mItemList" class="mgrList"></div></div>';
+}
+
+function vendorsManagerCard_(vendors) {
+  const counts = itemsCountByField_('vendorId');
+  const rows = (vendors || []).map(function (v) {
+    const days = parseDays_(v.orderDaysJson);
+    const rep = [v.repName, v.repPhone, v.repEmail].filter(Boolean).join(' · ');
+    return '<div class="mgrRow" data-id="' + esc_(v.id) + '">'
+      + '<div class="mgrMain"><strong>' + esc_(v.name) + '</strong>'
+      + (v.ref ? ' <span class="chip">' + esc_(v.ref) + '</span>' : '')
+      + (truthy_(v.active) ? '' : ' <span class="chip off">inactive</span>')
+      + '<div class="muted small">' + (rep ? esc_(rep) : 'no rep on file')
+        + (days.length ? (' · orders ' + esc_(days.join(', '))) : '')
+        + ' · ' + (counts[String(v.id)] || 0) + ' items</div>'
+      + '</div><button class="btn vEdit" type="button">Edit</button></div>';
+  }).join('');
+  return '<div class="settingsCard"><div class="mgrHead"><h3>Distributors</h3>'
+    + '<button class="btn primary" id="vAdd" type="button">+ Add distributor</button></div>'
+    + '<div class="mgrList">' + (rows || '<div class="muted small">None yet.</div>') + '</div></div>';
+}
+
+/** Generic card with reorder ↑↓, inline rename, optional active toggle + meta, add row. */
+function reorderableCard_(title, sheet, items, metaFn, opts) {
+  opts = opts || {};
+  const n = (items || []).length;
+  const rows = (items || []).map(function (it, i) {
+    return '<div class="mgrRow" data-id="' + esc_(it.id) + '">'
+      + '<div class="mgrOrder">'
+      + '<button class="btn tiny ord up" type="button"' + (i === 0 ? ' disabled' : '') + ' aria-label="Move up">▲</button>'
+      + '<button class="btn tiny ord down" type="button"' + (i === n - 1 ? ' disabled' : '') + ' aria-label="Move down">▼</button>'
+      + '</div>'
+      + (opts.active ? '<label class="mgrActive" title="Active"><input type="checkbox" class="actToggle"' + (truthy_(it.active) ? ' checked' : '') + '></label>' : '')
+      + '<input class="mgrName" type="text" value="' + esc_(it.name) + '">'
+      + (metaFn ? '<span class="mgrMeta muted small">' + esc_(metaFn(it)) + '</span>' : '')
+      + '<button class="btn mgrSave" type="button">Save</button>'
+      + '<button class="btn danger mgrDel" type="button">✕</button>'
+      + '</div>';
+  }).join('');
+  const singular = title.replace(/s$/, '').toLowerCase();
+  return '<div class="settingsCard" data-sheet="' + sheet + '"><div class="mgrHead"><h3>'
+    + esc_(title) + ' <span class="muted">(' + n + ')</span></h3></div>'
+    + '<div class="mgrList reorderable">' + (rows || '<div class="muted small">None yet.</div>') + '</div>'
+    + '<div class="mgrAddRow"><input class="mgrNew" type="text" placeholder="Add ' + esc_(singular) + '…">'
+    + '<button class="btn primary mgrAdd" type="button">Add</button></div></div>';
+}
+
+/* ----------------------------------------------------------------------------- *
+ *  Wiring
+ * ----------------------------------------------------------------------------- */
+
+function wireManage_(data) {
+  wireItemsManager_();
+  const vAdd = document.getElementById('vAdd');
+  if (vAdd) vAdd.addEventListener('click', function () { openVendorEditor_(null); });
+  document.querySelectorAll('.vEdit').forEach(function (btn) {
+    btn.addEventListener('click', function () { openVendorEditor_(btn.closest('.mgrRow').dataset.id); });
+  });
+  document.querySelectorAll('.settingsCard[data-sheet]').forEach(wireReorderCard_);
+}
+
+function afterListChange_() {
+  setPill('ok', 'Saved');
+  refreshData_().then(function () { if (typeof settingsUnlocked_ !== 'undefined' && settingsUnlocked_) renderSettings_(); });
+}
+
+function wireReorderCard_(card) {
+  const sheet = card.dataset.sheet;
+  const listEl = card.querySelector('.mgrList');
+  const idsNow = function () {
+    return Array.prototype.slice.call(listEl.querySelectorAll('.mgrRow')).map(function (r) { return r.dataset.id; });
+  };
+  card.querySelector('.mgrAdd').addEventListener('click', function () {
+    const inp = card.querySelector('.mgrNew');
+    const name = inp.value.trim(); if (!name) return;
+    setPill('pending', 'Saving…');
+    call_('upsertListItem', [sheet, { name: name }]).then(afterListChange_)
+      .catch(function (e) { setPill('err', 'Error'); setBanner('err', e.message || e); });
+  });
+  listEl.querySelectorAll('.mgrRow').forEach(function (row) {
+    const id = row.dataset.id;
+    const nameEl = row.querySelector('.mgrName');
+    const save = row.querySelector('.mgrSave'), del = row.querySelector('.mgrDel');
+    const act = row.querySelector('.actToggle');
+    const up = row.querySelector('.ord.up'), down = row.querySelector('.ord.down');
+    if (save) save.addEventListener('click', function () {
+      setPill('pending', 'Saving…');
+      call_('upsertListItem', [sheet, { id: id, name: nameEl.value.trim() }])
+        .then(function () { setPill('ok', 'Saved'); refreshData_(); })
+        .catch(function (e) { setPill('err', 'Error'); setBanner('err', e.message || e); });
+    });
+    if (del) del.addEventListener('click', function () {
+      if (!window.confirm('Delete this ' + sheet.replace(/s$/, '').toLowerCase() + '?')) return;
+      call_('deleteListItem', [sheet, id]).then(function (res) {
+        if (res && res.reassigned) {
+          setBanner('warn', res.reassigned + ' item(s) were detached.');
+          setTimeout(function () { setBanner(null); }, 3000);
+        }
+        afterListChange_();
+      }).catch(function (e) { setPill('err', 'Error'); setBanner('err', e.message || e); });
+    });
+    if (act) act.addEventListener('change', function () {
+      setPill('pending', 'Saving…');
+      call_('upsertListItem', [sheet, { id: id, active: act.checked }])
+        .then(function () { setPill('ok', 'Saved'); refreshData_(); })
+        .catch(function (e) { setPill('err', 'Error'); act.checked = !act.checked; });
+    });
+    if (up) up.addEventListener('click', function () { reorderSwap_(sheet, idsNow(), id, -1); });
+    if (down) down.addEventListener('click', function () { reorderSwap_(sheet, idsNow(), id, 1); });
+  });
+}
+
+function reorderSwap_(sheet, idList, id, delta) {
+  const i = idList.indexOf(id), j = i + delta;
+  if (i < 0 || j < 0 || j >= idList.length) return;
+  const tmp = idList[i]; idList[i] = idList[j]; idList[j] = tmp;
+  setPill('pending', 'Saving…');
+  call_('reorderListItems', [sheet, idList]).then(afterListChange_)
+    .catch(function (e) { setPill('err', 'Error'); setBanner('err', e.message || e); });
+}
+
+/* ----------------------------------------------------------------------------- *
+ *  Items manager
+ * ----------------------------------------------------------------------------- */
+
+function wireItemsManager_() {
+  const add = document.getElementById('mItemAdd');
+  if (!add) return;
+  add.addEventListener('click', function () { openItemEditor_(null, ''); });
+  ['mItemSearch', 'mItemCat', 'mItemVendor', 'mItemArchived'].forEach(function (id) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener(id === 'mItemSearch' ? 'input' : 'change', renderItemsManager_);
+  });
+  renderItemsManager_();
+}
+
+function renderItemsManager_() {
+  const host = document.getElementById('mItemList');
+  if (!host) return;
+  const catName = {}, venName = {};
+  ((State.data && State.data.categories) || []).forEach(function (c) { catName[String(c.id)] = c.name; });
+  ((State.data && State.data.vendors) || []).forEach(function (v) { venName[String(v.id)] = v.name; });
+  const q = (document.getElementById('mItemSearch').value || '').trim().toLowerCase();
+  const fcat = document.getElementById('mItemCat').value;
+  const fven = document.getElementById('mItemVendor').value;
+  const showArch = document.getElementById('mItemArchived').checked;
+
+  const all = Object.keys(State.itemsById).map(function (id) { return State.itemsById[id]; });
+  all.sort(function (a, b) { return String(a.commonName || '').localeCompare(String(b.commonName || '')); });
+  const rows = all.filter(function (it) {
+    if (!showArch && truthy_(it.archived)) return false;
+    if (fcat && String(it.categoryId) !== fcat) return false;
+    if (fven && String(it.vendorId) !== fven) return false;
+    if (q && ((it.commonName || '') + ' ' + (it.orderName || '')).toLowerCase().indexOf(q) === -1) return false;
+    return true;
+  });
+
+  if (!rows.length) { host.innerHTML = '<div class="muted small">No items match.</div>'; return; }
+  host.innerHTML = rows.map(function (it) {
+    const par = (it.par === '' || it.par == null) ? '—' : it.par;
+    return '<div class="mgrRow" data-id="' + esc_(it.id) + '">'
+      + '<div class="mgrMain"><strong>' + esc_(it.commonName || '(unnamed)') + '</strong>'
+      + (truthy_(it.archived) ? ' <span class="chip off">archived</span>' : '')
+      + '<div class="muted small">' + esc_(catName[String(it.categoryId)] || '— no category —')
+      + ' · ' + esc_(venName[String(it.vendorId)] || '— no distributor —')
+      + ' · par ' + esc_(par) + '</div></div>'
+      + '<button class="btn mItemEdit" type="button">Edit</button></div>';
+  }).join('');
+  host.querySelectorAll('.mItemEdit').forEach(function (btn) {
+    btn.addEventListener('click', function () { openItemEditor_(btn.closest('.mgrRow').dataset.id); });
+  });
+}
+
+/** Called by Client_Items after any item mutation so the manager stays current. */
+function onItemsChanged_() {
+  if (State.page === 'settings' && document.getElementById('mItemList')) renderItemsManager_();
+}
+
+/* ----------------------------------------------------------------------------- *
+ *  Distributor editor modal
+ * ----------------------------------------------------------------------------- */
+
+let editingVendorId_ = null;
+
+function openVendorEditor_(id) {
+  editingVendorId_ = id || null;
+  const v = id ? (((State.data && State.data.vendors) || []).filter(function (x) { return String(x.id) === String(id); })[0] || {}) : {};
+  document.getElementById('venTitle').textContent = id ? 'Edit distributor' : 'Add distributor';
+  document.getElementById('venName').value = v.name || '';
+  document.getElementById('venRef').value = v.ref || '';
+  document.getElementById('venRepName').value = v.repName || '';
+  document.getElementById('venRepPhone').value = v.repPhone || '';
+  document.getElementById('venRepEmail').value = v.repEmail || '';
+  document.getElementById('venActive').checked = id ? truthy_(v.active) : true;
+  const days = parseDays_(v.orderDaysJson);
+  document.getElementById('venDays').innerHTML = DAY_LABELS.map(function (d) {
+    return '<label class="dayChip"><input type="checkbox" value="' + d + '"' + (days.indexOf(d) !== -1 ? ' checked' : '') + '> ' + d + '</label>';
+  }).join('');
+  document.getElementById('venError').textContent = '';
+  document.getElementById('venDelete').style.display = id ? '' : 'none';
+  document.getElementById('vendorEditor').classList.add('show');
+}
+
+function closeVendorEditor_() {
+  document.getElementById('vendorEditor').classList.remove('show');
+  editingVendorId_ = null;
+}
+
+function saveVendor_() {
+  const err = document.getElementById('venError');
+  const name = document.getElementById('venName').value.trim();
+  if (!name) { err.textContent = 'Name is required.'; return; }
+  const days = Array.prototype.slice
+    .call(document.querySelectorAll('#venDays input:checked'))
+    .map(function (c) { return c.value; });
+  const rec = {
+    name: name,
+    ref: document.getElementById('venRef').value.trim(),
+    repName: document.getElementById('venRepName').value.trim(),
+    repPhone: document.getElementById('venRepPhone').value.trim(),
+    repEmail: document.getElementById('venRepEmail').value.trim(),
+    orderDaysJson: JSON.stringify(days),
+    active: document.getElementById('venActive').checked,
+  };
+  if (editingVendorId_) rec.id = editingVendorId_; else rec.sheetName = name;
+  setPill('pending', 'Saving…');
+  call_('upsertListItem', ['Vendors', rec]).then(function () {
+    closeVendorEditor_(); setPill('ok', 'Saved');
+    refreshData_().then(function () { if (settingsUnlocked_) renderSettings_(); });
+  }).catch(function (e) { err.textContent = 'Save failed: ' + (e.message || e); setPill('err', 'Error'); });
+}
+
+function deleteVendor_() {
+  if (!editingVendorId_) return;
+  if (!window.confirm('Delete this distributor? Items assigned to it become unassigned.')) return;
+  const id = editingVendorId_;
+  setPill('pending', 'Deleting…');
+  call_('deleteListItem', ['Vendors', id]).then(function (res) {
+    closeVendorEditor_();
+    if (res && res.reassigned) {
+      setBanner('warn', res.reassigned + ' item(s) detached from distributor.');
+      setTimeout(function () { setBanner(null); }, 3000);
+    }
+    setPill('ok', 'Deleted');
+    refreshData_().then(function () { if (settingsUnlocked_) renderSettings_(); });
+  }).catch(function (e) { document.getElementById('venError').textContent = 'Delete failed: ' + (e.message || e); setPill('err', 'Error'); });
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  document.getElementById('venSave').addEventListener('click', saveVendor_);
+  document.getElementById('venCancel').addEventListener('click', closeVendorEditor_);
+  document.getElementById('venDelete').addEventListener('click', deleteVendor_);
+});
+</script>

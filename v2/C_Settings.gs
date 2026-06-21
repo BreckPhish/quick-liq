@@ -28,7 +28,7 @@ function getSettings() {
       settingsPin: s.get(SETTING_KEYS.ACCESS_SETTINGS_PIN) || '',
       allowedDomains: s.get(SETTING_KEYS.ACCESS_ALLOWED_DOMAINS) || [],
       lists: {
-        Locations: new LocationsRepo().activeOrdered(),
+        Locations: new LocationsRepo().all().sort(function (a, b) { return num_(a.sortOrder) - num_(b.sortOrder); }),
         Categories: new CategoriesRepo().ordered(),
         Vendors: new VendorsRepo().all(),
         Sections: new SectionsRepo().ordered(),
@@ -85,13 +85,26 @@ function deleteListItem(sheetName, id) {
     assertAccess_();
     assertListSheet_(sheetName);
     return withLock_(function () {
+      let reassigned = 0;
       if (sheetName === SHEETS.SECTIONS) {
         new SectionItemsRepo().removeWhere((r) => String(r.sectionId) === String(id));
+      } else if (sheetName === SHEETS.VENDORS) {
+        reassigned = reassignItemRefs_('vendorId', id); // detach items from the deleted distributor
+      } else if (sheetName === SHEETS.CATEGORIES) {
+        reassigned = reassignItemRefs_('categoryId', id); // detach items from the deleted category
       }
       const removed = new TableRepo(sheetName, 'id').remove(id);
-      return { removed };
+      return { removed, reassigned };
     });
   });
+}
+
+/** Clear an item field that references a now-deleted category/vendor. Returns count changed. */
+function reassignItemRefs_(field, fromId) {
+  const items = new ItemsRepo();
+  const affected = items.filter((it) => String(it[field]) === String(fromId));
+  affected.forEach((it) => items.update(it.id, { [field]: '', updatedAt: nowIso_() }));
+  return affected.length;
 }
 
 function reorderListItems(sheetName, ids) {

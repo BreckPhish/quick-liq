@@ -221,6 +221,52 @@
     border-radius:8px; color:var(--text); padding:8px; font-size:14px;
   }
 
+  /* ---- Entity managers (items / distributors / categories / locations / …) ---- */
+  .mgrHead{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .mgrHead h3{ margin:0; }
+  .mgrHead .btn{ margin-top:0; }
+  .small{ font-size:12px; }
+  .mgrFilters{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:10px 0; }
+  .mgrFilters .mgrSearch, .mgrFilters select{
+    background:rgba(255,255,255,0.06); border:1px solid var(--border); border-radius:8px;
+    color:var(--text); padding:8px; font-size:14px;
+  }
+  .mgrFilters .mgrSearch{ flex:1 1 160px; min-width:0; }
+  .mgrList{ display:flex; flex-direction:column; gap:6px; margin-top:10px; }
+  .mgrRow{
+    display:flex; align-items:center; gap:8px; padding:8px;
+    border:1px solid var(--border); border-radius:10px; background:rgba(255,255,255,0.03);
+  }
+  .mgrMain{ flex:1 1 auto; min-width:0; }
+  .mgrMain strong{ display:inline; }
+  .mgrName{
+    flex:1 1 auto; min-width:0; background:rgba(255,255,255,0.06); border:1px solid var(--border);
+    border-radius:8px; color:var(--text); padding:8px; font-size:14px;
+  }
+  .mgrMeta{ white-space:nowrap; }
+  .mgrOrder{ display:flex; flex-direction:column; gap:2px; }
+  .mgrActive{ display:flex; align-items:center; }
+  .mgrAddRow{ display:flex; gap:6px; align-items:center; margin-top:10px; }
+  .mgrAddRow .mgrNew{
+    flex:1 1 auto; min-width:0; background:rgba(255,255,255,0.06); border:1px solid var(--border);
+    border-radius:8px; color:var(--text); padding:8px; font-size:14px;
+  }
+  .mgrRow .btn{ margin-top:0; }
+  .btn.tiny{ padding:2px 8px; font-size:11px; line-height:1.2; min-width:0; }
+  .chip{
+    display:inline-block; font-size:11px; font-weight:800; letter-spacing:.04em;
+    padding:1px 7px; border-radius:999px; background:var(--accentSoft); color:var(--text);
+    border:1px solid var(--border); vertical-align:middle;
+  }
+  .chip.off{ background:transparent; color:var(--muted); }
+  .toggleField{ flex-direction:row !important; align-items:center; gap:8px; }
+  .fieldLabel{ display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
+  .dayChips{ display:flex; flex-wrap:wrap; gap:6px; }
+  .dayChip{
+    display:inline-flex; align-items:center; gap:4px; font-size:13px;
+    padding:5px 9px; border:1px solid var(--border); border-radius:999px; cursor:pointer;
+  }
+
   /* ---- Responsive: keep rows single-line on tablets (Galaxy Tab A9+ etc.) ---- */
   @media (min-width:600px) and (max-width:1366px){
     .itemRow .itemName{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
