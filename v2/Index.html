@@ -33,6 +33,7 @@
     <div class="headerRow">
       <nav class="pageTabs" aria-label="Pages">
         <button class="pageTabBtn active" type="button" data-page="inventory">Inventory</button>
+        <button class="pageTabBtn" type="button" data-page="orders">Order Guide</button>
         <button class="pageTabBtn" type="button" data-page="recipes">Batch Recipes</button>
         <button class="pageTabBtn" type="button" data-page="settings">Settings</button>
       </nav>
@@ -64,15 +65,68 @@
     </div>
   </main>
 
-  <!-- Recipes page (phase 2 editor; phase 1 shows summary) -->
+  <!-- Order Guide page -->
+  <main id="pageOrders" class="page">
+    <div class="wrap">
+      <div class="ordersHead">
+        <h2 class="pageHeading">Order Guide</h2>
+        <label class="toggleRow"><input id="ordersIncludeAtPar" type="checkbox"> Show items already at par</label>
+        <button id="ordersRefresh" class="btn" type="button">Refresh</button>
+      </div>
+      <p class="muted">Suggested orders are computed from on-hand totals (counts + batch demand)
+        against each item's par, grouped by distributor.</p>
+      <div id="ordersBody" class="ordersBody"></div>
+    </div>
+  </main>
+
+  <!-- Recipes page -->
   <main id="pageRecipes" class="page">
     <div class="wrap">
-      <h2 class="pageHeading">Batch Cocktail Recipes</h2>
+      <div class="ordersHead">
+        <h2 class="pageHeading">Batch Cocktail Recipes</h2>
+        <button id="newRecipeBtn" class="btn primary" type="button">+ New recipe</button>
+      </div>
       <p class="muted">Each recipe's on-hand batch bottles are converted to bottles of each base
-        liquor and folded into your counts. Full editor arrives in the next phase.</p>
+        liquor and folded into your counts and order guide.</p>
       <div id="recipeList" class="recipeList"></div>
     </div>
   </main>
+
+  <!-- Recipe editor modal -->
+  <div id="recipeEditor" class="overlay" role="dialog" aria-modal="true" aria-labelledby="recipeEditorTitle">
+    <div class="modal recipeModal">
+      <h2 id="recipeEditorTitle">Batch Recipe</h2>
+      <label class="field">Name <input id="reName" type="text" placeholder="e.g. Negroni Batch"></label>
+      <div class="fieldRow">
+        <label class="field">Group
+          <select id="reGroup"></select>
+        </label>
+      </div>
+      <div class="fieldRow">
+        <label class="field">Yield amount <input id="reYieldAmt" type="text" inputmode="decimal" placeholder="5000"></label>
+        <label class="field">Unit <select id="reYieldUnit"></select></label>
+      </div>
+      <div class="fieldRow">
+        <label class="field">Batch bottle size <input id="reBottleAmt" type="text" inputmode="decimal" placeholder="750"></label>
+        <label class="field">Unit <select id="reBottleUnit"></select></label>
+      </div>
+      <label class="field">Bottles on hand <input id="reBottleCount" type="text" inputmode="decimal" placeholder="0"></label>
+
+      <div class="ingHead">
+        <strong>Ingredients</strong>
+        <button id="reAddIng" class="btn" type="button">+ Add ingredient</button>
+      </div>
+      <div id="reIngList" class="ingList"></div>
+      <div id="reError" class="errorText"></div>
+
+      <div class="modalActions">
+        <button id="reDelete" class="btn danger" type="button">Delete</button>
+        <span class="spacer"></span>
+        <button id="reCancel" class="btn" type="button">Cancel</button>
+        <button id="reSave" class="btn primary" type="button">Save recipe</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Settings page -->
   <main id="pageSettings" class="page">
@@ -85,5 +139,7 @@
   <?!= include('Client_Core'); ?>
   <?!= include('Client_Render'); ?>
   <?!= include('Client_Counting'); ?>
+  <?!= include('Client_Recipes'); ?>
+  <?!= include('Client_Orders'); ?>
 </body>
 </html>

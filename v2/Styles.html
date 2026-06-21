@@ -148,6 +148,49 @@
   .errorText{ color:var(--bad); font-size:13px; min-height:18px; margin-bottom:8px; }
   .launchModal .btn{ width:100%; }
 
+  .recipeCard{ position:relative; }
+  .recipeCard .rEdit{ margin-top:10px; width:100%; }
+
+  /* ---- Order guide ---- */
+  .ordersHead{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .ordersHead .pageHeading{ margin:6px 0; }
+  .toggleRow{ display:flex; align-items:center; gap:6px; font-size:13px; color:var(--muted); }
+  .ordersBody{ display:grid; gap:14px; }
+  .orderGroup{ background:var(--card); border:1px solid var(--border); border-radius:14px; padding:12px 14px; }
+  .orderVendor{ font-weight:900; letter-spacing:0.3px; margin-bottom:8px; }
+  .orderTable{ width:100%; border-collapse:collapse; font-size:13px; }
+  .orderTable th, .orderTable td{ text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); }
+  .orderTable th.num, .orderTable td.num{ text-align:right; white-space:nowrap; }
+  .orderTable td.order{ font-weight:900; color:var(--good); }
+  .copyOrder{ margin-top:10px; }
+
+  /* ---- Recipe editor modal ---- */
+  .recipeModal{ width:min(560px,94vw); max-height:88vh; overflow:auto; }
+  .field{ display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); font-weight:700; margin-top:10px; }
+  .field input, .field select{
+    background:rgba(255,255,255,0.06); border:1px solid var(--border); border-radius:10px;
+    color:var(--text); padding:10px; font-size:16px;
+  }
+  .fieldRow{ display:flex; gap:10px; }
+  .fieldRow .field{ flex:1 1 0; min-width:0; }
+  .ingHead{ display:flex; align-items:center; justify-content:space-between; margin-top:16px; }
+  .ingList{ display:flex; flex-direction:column; gap:8px; margin-top:8px; }
+  .ingRow{ display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1.4fr) 70px 88px 40px; gap:6px; align-items:center; }
+  .ingRow select, .ingRow input{
+    background:rgba(255,255,255,0.06); border:1px solid var(--border); border-radius:8px;
+    color:var(--text); padding:8px; font-size:14px; min-width:0;
+  }
+  .ingRow .ingName[hidden]{ display:none; }
+  .ingRow .ingDel{ padding:8px; font-weight:900; }
+  .modalActions{ display:flex; align-items:center; gap:8px; margin-top:18px; }
+  .modalActions .spacer{ flex:1 1 auto; }
+  .btn.danger{ color:var(--bad); border-color:rgba(255,106,106,0.4); }
+
+  @media (max-width:560px){
+    .ingRow{ grid-template-columns:1fr 1fr; }
+    .fieldRow{ flex-direction:column; }
+  }
+
   /* ---- Responsive: keep rows single-line on tablets (Galaxy Tab A9+ etc.) ---- */
   @media (min-width:600px) and (max-width:1366px){
     .itemRow .itemName{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }

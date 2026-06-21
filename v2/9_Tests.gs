@@ -67,6 +67,35 @@ function runTests() {
     approx(itemTotal_({ BAR: '2', OTHER: '1.5' }, 0.5), 4.0);
   });
 
+  // --- Ordering ---
+  t('orderSuggestion: deficit ceils to whole bottles', function () {
+    const s = orderSuggestion_({ par: 6, caseSize: 0 }, 2.4);
+    eq(s.suggestedUnits, 4); // ceil(6 - 2.4) = ceil(3.6)
+  });
+  t('orderSuggestion: at/above par or no par suggests nothing', function () {
+    eq(orderSuggestion_({ par: 3 }, 3).suggestedUnits, 0);
+    eq(orderSuggestion_({ par: 3 }, 5).suggestedUnits, 0);
+    eq(orderSuggestion_({ par: 0 }, 0).suggestedUnits, 0);
+  });
+  t('orderSuggestion: cases round up by caseSize', function () {
+    const s = orderSuggestion_({ par: 24, caseSize: 12 }, 1);
+    eq(s.suggestedUnits, 23);
+    eq(s.suggestedCases, 2); // ceil(23/12)
+  });
+  t('buildOrderGuide groups by vendor and hides at-par by default', function () {
+    const items = [
+      { id: 'A', commonName: 'Gin', vendorId: 'RNDC', par: 4, archived: false },
+      { id: 'B', commonName: 'Rum', vendorId: 'RNDC', par: 2, archived: false },
+      { id: 'C', commonName: 'Soda', vendorId: 'SODAS', par: 10, archived: false },
+    ];
+    const g = buildOrderGuide_(items, { A: 1, B: 2, C: 10 }, {});
+    eq(g.length, 1);
+    eq(g[0].vendorId, 'RNDC');
+    eq(g[0].lines.length, 1);
+    eq(g[0].lines[0].itemId, 'A');
+    eq(g[0].lines[0].suggestedUnits, 3);
+  });
+
   const failed = results.filter((r) => !r.ok);
   failed.forEach((r) => console.error('FAIL ' + r.name + ': ' + r.error));
   const summary = { passed: results.length - failed.length, failed: failed.length, total: results.length, failures: failed };

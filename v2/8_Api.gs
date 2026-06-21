@@ -236,6 +236,40 @@ function deleteRecipe(id) {
 }
 
 /* ----------------------------------------------------------------------------- *
+ *  ORDER GUIDE
+ * ----------------------------------------------------------------------------- */
+
+/** Total on-hand per item = sum(location counts) + batch contribution. */
+function onHandTotals_() {
+  const counts = new CountsRepo().byItem();
+  const batch = computeBatchContributions_();
+  const items = new ItemsRepo().all();
+  const totals = {};
+  items.forEach(function (it) {
+    const id = String(it.id);
+    totals[id] = itemTotal_(counts[id] || {}, batch[id] || 0);
+  });
+  return totals;
+}
+
+/**
+ * Computed order guide grouped by vendor.
+ * @param {boolean} includeAtPar  also list items already at/above par
+ */
+function getOrderGuide(includeAtPar) {
+  return api_(function () {
+    assertAccess_();
+    const items = new ItemsRepo().all();
+    const vendorName = {};
+    new VendorsRepo().all().forEach(function (v) { vendorName[String(v.id)] = v.name; });
+    const groups = buildOrderGuide_(items, onHandTotals_(), { includeAtPar: !!includeAtPar });
+    groups.forEach(function (g) { g.vendorName = vendorName[g.vendorId] || g.vendorId || 'UNASSIGNED'; });
+    groups.sort(function (a, b) { return String(a.vendorName).localeCompare(String(b.vendorName)); });
+    return { groups: groups };
+  });
+}
+
+/* ----------------------------------------------------------------------------- *
  *  META
  * ----------------------------------------------------------------------------- */
 

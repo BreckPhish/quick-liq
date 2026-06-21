@@ -148,13 +148,16 @@ v2/
 
 ## Roadmap
 
-- **Phase 1 (this commit):** schema + bootstrap, data layer, pure calc services + tests,
-  core API (bootstrap/items/counts/sections/groups/recipes), counting UI (render, search,
-  autosave, offline queue), auth gate.
-- **Phase 2:** batch-recipe editor UI, order-guide generation + the `LET/VLOOKUP`-free
-  quantity model, distributor management.
-- **Phase 3:** PDF export + email + zip, print layout.
-- **Phase 4:** customization (labels/colors/layout), import/export, legacy migration.
+- **Phase 1 ✅:** schema + bootstrap, data layer, pure calc services + tests, core API
+  (bootstrap/items/counts/sections/groups/recipes), counting UI (render, search, autosave,
+  offline queue), auth gate.
+- **Phase 2 ✅:** full batch-recipe editor UI (create/edit/delete + ingredients), and a
+  **computed** order guide (`OrderingService`, grouped by distributor) — order quantities
+  are derived in code from on-hand vs par, replacing v1's `LET/VLOOKUP` formula injection.
+- **Phase 2.5 (next):** distributor management UI (vendor CRUD, rep/order-day config),
+  item add/edit modal, section/group editing + drag reorder.
+- **Phase 3:** PDF export + email + print layout.
+- **Phase 4:** customization (labels/colors/layout), import/export, **v1 → v2 migration**.
 - **Phase 5:** PWA manifest + service worker, multi-device sync hardening.
 
 ## Deploy
