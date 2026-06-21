@@ -1,0 +1,77 @@
+<script>
+/* ===========================================================================
+ * Client_Reports — download / email inventory + order-guide PDFs.
+ * Flushes pending counts first so reports reflect the latest numbers.
+ * =========================================================================== */
+
+function openReports_() { document.getElementById('reportsModal').classList.add('show'); document.getElementById('rpError').textContent = ''; }
+function closeReports_() { document.getElementById('reportsModal').classList.remove('show'); }
+
+function downloadBase64_(b64, mime, name) {
+  const bytes = atob(b64);
+  const arr = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([arr], { type: mime }));
+  const a = document.createElement('a');
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+}
+
+/** Ensure server has the latest counts before generating a report. */
+function withFlushed_(fn) {
+  if (State.pending.size === 0) { fn(); return; }
+  setPill('pending', 'Saving…');
+  flushPending_();
+  // small delay to let the flush land; flush is debounced/awaited best-effort
+  setTimeout(fn, 700);
+}
+
+function downloadReport_(kind) {
+  const endpoint = kind === 'order' ? 'generateOrderGuidePdf' : 'generateInventoryPdf';
+  setPill('pending', 'Building PDF…');
+  withFlushed_(function () {
+    call_(endpoint, []).then(function (res) {
+      downloadBase64_(res.data, res.mimeType, res.fileName);
+      setPill('ok', 'Ready');
+    }).catch(function (e) {
+      setPill('err', 'Error');
+      document.getElementById('rpError').textContent = 'PDF failed: ' + (e && e.message ? e.message : e);
+    });
+  });
+}
+
+function sendReportEmail_() {
+  const err = document.getElementById('rpError'); err.textContent = '';
+  const payload = {
+    recipients: document.getElementById('rpRecipients').value,
+    subject: document.getElementById('rpSubject').value,
+    body: document.getElementById('rpBody').value,
+    includeInventory: document.getElementById('rpInventory').checked,
+    includeOrder: document.getElementById('rpOrder').checked,
+  };
+  if (!payload.recipients.trim()) { err.textContent = 'Enter at least one recipient.'; return; }
+  if (!payload.includeInventory && !payload.includeOrder) { err.textContent = 'Select at least one report.'; return; }
+  const btn = document.getElementById('rpSend'); btn.disabled = true;
+  setPill('pending', 'Emailing…');
+  withFlushed_(function () {
+    call_('emailReports', [payload]).then(function (res) {
+      btn.disabled = false;
+      setPill('ok', 'Sent');
+      setBanner('warn', 'Emailed ' + res.attachments + ' report(s) to ' + res.recipients + ' recipient(s).');
+      setTimeout(function () { setBanner(null); }, 3500);
+      closeReports_();
+    }).catch(function (e) {
+      btn.disabled = false; setPill('err', 'Error');
+      err.textContent = 'Email failed: ' + (e && e.message ? e.message : e);
+    });
+  });
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  document.getElementById('reportsBtn').addEventListener('click', openReports_);
+  document.getElementById('rpCancel').addEventListener('click', closeReports_);
+  document.getElementById('rpDownloadInv').addEventListener('click', function () { downloadReport_('inventory'); });
+  document.getElementById('rpDownloadOrder').addEventListener('click', function () { downloadReport_('order'); });
+  document.getElementById('rpSend').addEventListener('click', sendReportEmail_);
+});
+</script>

@@ -157,9 +157,13 @@ v2/
 - **Phase 2.5 (in progress):** ✅ item add/edit/archive/delete modal (tap a name to edit;
   "+ Add item"; section placement; "(Unsectioned)" catch-all so no item is ever hidden).
   Next: distributor/vendor CRUD UI, section/group create + drag reorder.
-- **Phase 3:** PDF export + email + print layout.
-- **Phase 4:** customization (labels/colors/layout), import/export, **v1 → v2 migration**.
-- **Phase 5:** PWA manifest + service worker, multi-device sync hardening.
+- **Phase 3 ✅:** PDF export (inventory + order guide) and email, via the GAS temp-sheet→PDF
+  pattern (`B_Reports.gs`) + a Reports modal (download / email selected reports).
+- **Migration ✅:** `A_Migrate.gs` — `migrateFromV1('OLD_SPREADSHEET_ID')` imports legacy
+  items, counts (G/H/J→locations), sections + membership, shortcuts/secondary sections,
+  groups, batch recipes, vendors, and archived flags into the v2 tables (preserves item ids).
+- **Phase 4 (remaining):** customization UI (labels/colors/layout) + JSON import/export.
+- **Phase 5:** PWA manifest + service worker (installable, offline-first), multi-device sync.
 
 ## Deploy
 

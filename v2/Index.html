@@ -28,7 +28,10 @@
         <div class="companyName" id="companyName">TIN PLATE HOSPITALITY GROUP, LLC</div>
         <div class="portalName" id="portalName">BEVERAGE MANAGEMENT PORTAL</div>
       </div>
-      <div id="savePill" class="pill" role="status" aria-live="polite">Idle</div>
+      <div class="headerActions">
+        <button id="reportsBtn" class="btn" type="button">Reports</button>
+        <div id="savePill" class="pill" role="status" aria-live="polite">Idle</div>
+      </div>
     </div>
     <div class="headerRow">
       <nav class="pageTabs" aria-label="Pages">
@@ -172,11 +175,38 @@
     </div>
   </div>
 
+  <!-- Reports modal -->
+  <div id="reportsModal" class="overlay" role="dialog" aria-modal="true" aria-labelledby="reportsTitle">
+    <div class="modal recipeModal">
+      <h2 id="reportsTitle">Reports</h2>
+      <label class="toggleRow"><input id="rpInventory" type="checkbox" checked> Inventory count sheet</label>
+      <label class="toggleRow"><input id="rpOrder" type="checkbox"> Order guide</label>
+
+      <div class="ingHead"><strong>Download</strong></div>
+      <div class="modalActions" style="margin-top:8px;">
+        <button id="rpDownloadInv" class="btn" type="button">Inventory PDF</button>
+        <button id="rpDownloadOrder" class="btn" type="button">Order PDF</button>
+      </div>
+
+      <div class="ingHead"><strong>Email selected</strong></div>
+      <label class="field">Recipients <input id="rpRecipients" type="text" inputmode="email" placeholder="name@example.com, …"></label>
+      <label class="field">Subject <input id="rpSubject" type="text" value="Tin Plate — Beverage Report"></label>
+      <label class="field">Message <input id="rpBody" type="text" value="Reports attached."></label>
+      <div id="rpError" class="errorText"></div>
+      <div class="modalActions">
+        <span class="spacer"></span>
+        <button id="rpCancel" class="btn" type="button">Close</button>
+        <button id="rpSend" class="btn primary" type="button">Send email</button>
+      </div>
+    </div>
+  </div>
+
   <?!= include('Client_Core'); ?>
   <?!= include('Client_Render'); ?>
   <?!= include('Client_Counting'); ?>
   <?!= include('Client_Recipes'); ?>
   <?!= include('Client_Orders'); ?>
   <?!= include('Client_Items'); ?>
+  <?!= include('Client_Reports'); ?>
 </body>
 </html>
