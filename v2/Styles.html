@@ -197,6 +197,20 @@
     .fieldRow{ flex-direction:column; }
   }
 
+  /* ---- Settings ---- */
+  .settingsBody{ display:grid; gap:14px; }
+  .settingsCard{ background:var(--card); border:1px solid var(--border); border-radius:14px; padding:14px 16px; }
+  .settingsCard h3{ margin:0 0 8px; font-size:15px; }
+  .settingsCard .btn{ margin-top:10px; }
+  .listGroup{ border-top:1px solid var(--border); padding:8px 0; }
+  .listGroup summary{ cursor:pointer; font-weight:800; padding:4px 0; }
+  .listRows{ display:flex; flex-direction:column; gap:6px; margin:8px 0; }
+  .listRow{ display:flex; gap:6px; align-items:center; }
+  .listRow input{
+    flex:1 1 auto; min-width:0; background:rgba(255,255,255,0.06); border:1px solid var(--border);
+    border-radius:8px; color:var(--text); padding:8px; font-size:14px;
+  }
+
   /* ---- Responsive: keep rows single-line on tablets (Galaxy Tab A9+ etc.) ---- */
   @media (min-width:600px) and (max-width:1366px){
     .itemRow .itemName{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }

@@ -1,0 +1,193 @@
+<script>
+/* ===========================================================================
+ * Client_Settings — PIN-gated settings: access, appearance, data backup/restore,
+ * v1 migration, and list management (locations / categories / vendors / sections / groups).
+ * =========================================================================== */
+
+let settingsUnlocked_ = false;
+let settingsData_ = null;
+
+function renderSettings_() {
+  const body = document.getElementById('settingsBody');
+  if (!settingsUnlocked_) { renderSettingsGate_(body); return; }
+  body.innerHTML = '<div class="muted">Loading…</div>';
+  call_('getSettings').then(function (data) {
+    settingsData_ = data;
+    renderSettingsPanels_(body, data);
+  }).catch(function (e) { body.innerHTML = '<div class="banner err">' + esc_(e.message || e) + '</div>'; });
+}
+
+function renderSettingsGate_(body) {
+  body.innerHTML =
+    '<div class="settingsCard"><h3>Settings access</h3>'
+    + '<label class="field">Settings PIN <input id="setPin" type="password" inputmode="numeric" autocomplete="one-time-code"></label>'
+    + '<div id="setPinErr" class="errorText"></div>'
+    + '<button id="setPinBtn" class="btn primary" type="button">Unlock</button></div>';
+  const submit = function () {
+    const pin = document.getElementById('setPin').value;
+    run_('verifySettingsPin', [pin]).then(function (res) {
+      if (res && res.ok) { settingsUnlocked_ = true; renderSettings_(); }
+      else document.getElementById('setPinErr').textContent = 'Incorrect PIN.';
+    });
+  };
+  document.getElementById('setPinBtn').addEventListener('click', submit);
+  document.getElementById('setPin').addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
+}
+
+function renderSettingsPanels_(body, data) {
+  body.innerHTML = ''
+    + accessPanel_(data)
+    + appearancePanel_(data)
+    + dataPanel_()
+    + listsPanel_(data.lists);
+  wireSettingsPanels_(data);
+}
+
+/* ---- Panels ---- */
+function accessPanel_(d) {
+  return '<div class="settingsCard"><h3>Access</h3>'
+    + '<div class="fieldRow">'
+    + '<label class="field">Launch PIN <input id="setLaunchPin" type="text" value="' + esc_(d.launchPin) + '"></label>'
+    + '<label class="field">Settings PIN <input id="setSettingsPin" type="text" value="' + esc_(d.settingsPin) + '"></label>'
+    + '</div>'
+    + '<label class="field">Allowed email domains (comma-separated; blank = any signed-in user) '
+    + '<input id="setDomains" type="text" value="' + esc_((d.allowedDomains || []).join(', ')) + '"></label>'
+    + '<button id="setAccessSave" class="btn primary" type="button">Save access</button></div>';
+}
+function appearancePanel_(d) {
+  const t = d.uiText || {};
+  return '<div class="settingsCard"><h3>Appearance</h3>'
+    + '<label class="field">Company name <input id="setCompany" type="text" value="' + esc_(t.companyName || '') + '"></label>'
+    + '<label class="field">Portal name <input id="setPortal" type="text" value="' + esc_(t.portalName || '') + '"></label>'
+    + '<button id="setTextSave" class="btn primary" type="button">Save appearance</button></div>';
+}
+function dataPanel_() {
+  return '<div class="settingsCard"><h3>Data</h3>'
+    + '<div class="modalActions" style="margin:0 0 10px;">'
+    + '<button id="setExport" class="btn" type="button">Export backup (JSON)</button>'
+    + '<button id="setImportBtn" class="btn" type="button">Import backup…</button>'
+    + '<input id="setImportFile" type="file" accept="application/json" hidden>'
+    + '</div>'
+    + '<h4 class="muted" style="margin:10px 0 4px;">Migrate from v1</h4>'
+    + '<label class="field">Legacy spreadsheet ID <input id="setMigrateId" type="text" placeholder="old Google Sheet id"></label>'
+    + '<button id="setMigrateBtn" class="btn" type="button">Run migration</button>'
+    + '<div id="setDataMsg" class="muted" style="margin-top:8px;"></div></div>';
+}
+function listsPanel_(lists) {
+  const order = ['Locations', 'Categories', 'Vendors', 'Sections', 'Groups'];
+  return '<div class="settingsCard"><h3>Lists</h3>'
+    + order.map(function (name) {
+      const items = (lists && lists[name]) || [];
+      const rows = items.map(function (it) {
+        return '<div class="listRow" data-id="' + esc_(it.id) + '">'
+          + '<input class="listName" type="text" value="' + esc_(it.name) + '">'
+          + '<button class="btn listSave" type="button">Save</button>'
+          + '<button class="btn danger listDel" type="button">✕</button></div>';
+      }).join('');
+      return '<details class="listGroup" data-sheet="' + name + '"><summary>' + name + ' <span class="muted">(' + items.length + ')</span></summary>'
+        + '<div class="listRows">' + rows + '</div>'
+        + '<div class="listRow"><input class="listNew" type="text" placeholder="Add ' + name.replace(/s$/, '').toLowerCase() + '…">'
+        + '<button class="btn listAdd primary" type="button">Add</button></div>'
+        + '</details>';
+    }).join('')
+    + '</div>';
+}
+
+/* ---- Wiring ---- */
+function wireSettingsPanels_(data) {
+  document.getElementById('setAccessSave').addEventListener('click', function () {
+    saveSettings_({ launchPin: document.getElementById('setLaunchPin').value,
+      settingsPin: document.getElementById('setSettingsPin').value,
+      allowedDomains: document.getElementById('setDomains').value }, 'Access saved.');
+  });
+  document.getElementById('setTextSave').addEventListener('click', function () {
+    const uiText = Object.assign({}, (settingsData_ && settingsData_.uiText) || {}, {
+      companyName: document.getElementById('setCompany').value,
+      portalName: document.getElementById('setPortal').value,
+    });
+    saveSettings_({ uiText: uiText }, 'Appearance saved.').then(function () {
+      document.getElementById('companyName').textContent = uiText.companyName;
+      document.getElementById('portalName').textContent = uiText.portalName;
+    });
+  });
+
+  document.getElementById('setExport').addEventListener('click', exportBackup_);
+  document.getElementById('setImportBtn').addEventListener('click', function () { document.getElementById('setImportFile').click(); });
+  document.getElementById('setImportFile').addEventListener('change', importBackup_);
+  document.getElementById('setMigrateBtn').addEventListener('click', runMigration_);
+
+  document.querySelectorAll('.listGroup').forEach(function (group) {
+    const sheet = group.dataset.sheet;
+    group.querySelectorAll('.listRow').forEach(function (row) { wireListRow_(sheet, row); });
+    group.querySelector('.listAdd').addEventListener('click', function () {
+      const input = group.querySelector('.listNew');
+      const name = input.value.trim(); if (!name) return;
+      call_('upsertListItem', [sheet, { name: name }]).then(function () { settingsUnlocked_ && renderSettings_(); refreshData_(); });
+    });
+  });
+}
+
+function wireListRow_(sheet, row) {
+  const id = row.dataset.id; if (!id) return;
+  const save = row.querySelector('.listSave'), del = row.querySelector('.listDel');
+  if (save) save.addEventListener('click', function () {
+    call_('upsertListItem', [sheet, { id: id, name: row.querySelector('.listName').value.trim() }])
+      .then(function () { refreshData_(); setPill('ok', 'Saved'); });
+  });
+  if (del) del.addEventListener('click', function () {
+    if (!window.confirm('Delete this ' + sheet.replace(/s$/, '') + '?')) return;
+    call_('deleteListItem', [sheet, id]).then(function () { renderSettings_(); refreshData_(); });
+  });
+}
+
+function saveSettings_(payload, okMsg) {
+  setPill('pending', 'Saving…');
+  return call_('saveAppSettings', [payload]).then(function () {
+    setPill('ok', 'Saved');
+    setBanner('warn', okMsg); setTimeout(function () { setBanner(null); }, 2500);
+  }).catch(function (e) { setPill('err', 'Error'); setBanner('err', e.message || e); });
+}
+
+/* ---- Data ops ---- */
+function exportBackup_() {
+  document.getElementById('setDataMsg').textContent = 'Exporting…';
+  call_('exportData').then(function (data) {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'invent-v2-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    document.getElementById('setDataMsg').textContent = 'Backup downloaded.';
+  }).catch(function (e) { document.getElementById('setDataMsg').textContent = 'Export failed: ' + (e.message || e); });
+}
+
+function importBackup_(e) {
+  const file = e.target.files && e.target.files[0]; if (!file) return;
+  if (!window.confirm('Importing a backup REPLACES all current data. Continue?')) { e.target.value = ''; return; }
+  const reader = new FileReader();
+  reader.onload = function () {
+    let payload; try { payload = JSON.parse(reader.result); } catch (err) { document.getElementById('setDataMsg').textContent = 'Not valid JSON.'; return; }
+    document.getElementById('setDataMsg').textContent = 'Importing…';
+    call_('importData', [payload]).then(function (res) {
+      document.getElementById('setDataMsg').textContent = 'Restored ' + res.restored + ' rows.';
+      refreshData_(); renderSettings_();
+    }).catch(function (err) { document.getElementById('setDataMsg').textContent = 'Import failed: ' + (err.message || err); });
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+}
+
+function runMigration_() {
+  const id = document.getElementById('setMigrateId').value.trim();
+  if (!id) { document.getElementById('setDataMsg').textContent = 'Enter the legacy spreadsheet ID.'; return; }
+  if (!window.confirm('Migrate data from the legacy spreadsheet into this one?')) return;
+  document.getElementById('setDataMsg').textContent = 'Migrating… (this can take a minute)';
+  call_('migrateFromV1', [id]).then(function (res) {
+    const s = res.summary || {};
+    document.getElementById('setDataMsg').textContent =
+      'Migrated: ' + s.items + ' items, ' + s.counts + ' counts, ' + s.sections + ' sections, '
+      + s.recipes + ' recipes, ' + s.vendors + ' new vendors.';
+    refreshData_(); renderSettings_();
+  }).catch(function (e) { document.getElementById('setDataMsg').textContent = 'Migration failed: ' + (e.message || e); });
+}

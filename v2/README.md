@@ -162,8 +162,22 @@ v2/
 - **Migration ✅:** `A_Migrate.gs` — `migrateFromV1('OLD_SPREADSHEET_ID')` imports legacy
   items, counts (G/H/J→locations), sections + membership, shortcuts/secondary sections,
   groups, batch recipes, vendors, and archived flags into the v2 tables (preserves item ids).
-- **Phase 4 (remaining):** customization UI (labels/colors/layout) + JSON import/export.
-- **Phase 5:** PWA manifest + service worker (installable, offline-first), multi-device sync.
+- **Phase 4 ✅:** PIN-gated **Settings** page — access config (PINs, allowed domains),
+  appearance (company/portal names), full **data backup/restore** (JSON export/import),
+  an in-app **v1 migration runner**, and list management (locations/categories/vendors/
+  sections/groups) — all via `C_Settings.gs`.
+- **Phase 5 (hosting-limited):** A true installable PWA + offline service worker is **not
+  feasible under Apps Script hosting** (the app is served in a sandboxed iframe; SW scope /
+  a stable manifest path aren't available). The in-session **offline autosave queue**
+  already covers flaky-Wi-Fi resilience during a count. Full offline cold-start + real-time
+  multi-device sync would require the hosted-DB path (e.g. Supabase) noted in the rebuild
+  guidance — a clean future migration, since the data layer is already adapter-shaped.
+
+## Status
+
+Phases 1–4 are complete: this is a working, end-to-end beverage-inventory app on a clean
+normalized backend — counting, item management, batch recipes, computed order guide,
+PDF/email reports, settings, backup/restore, and v1 migration. Deploy steps below.
 
 ## Deploy
 
