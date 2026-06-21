@@ -1,0 +1,138 @@
+<script>
+/* ===========================================================================
+ * Client_Move — "Move" mode: drag to reorder items within/between sections, and
+ * reorder whole sections. Pointer-events (mouse + touch). Persists via
+ * setSectionItemOrder / reorderListItems.
+ * =========================================================================== */
+
+State.moveMode = false;
+let moveDrag_ = null;
+const MOVE_THRESHOLD = 8;
+
+function toggleMove_() {
+  State.moveMode = !State.moveMode;
+  document.body.classList.toggle('moveMode', State.moveMode);
+  const btn = document.getElementById('moveToggle');
+  btn.classList.toggle('primary', State.moveMode);
+  btn.textContent = State.moveMode ? 'Done' : 'Move';
+}
+
+function clearDropMarks_() {
+  document.querySelectorAll('.dropMark').forEach(function (el) {
+    el.classList.remove('dropMark', 'dropBefore', 'dropAfter');
+  });
+}
+
+function onRowsPointerDown_(e) {
+  if (!State.moveMode) return;
+  const itemRow = e.target.closest('.itemRow[data-item-id]');
+  const header = e.target.closest('.group.section[data-section-id]');
+  let drag = null;
+  if (itemRow) {
+    const body = itemRow.closest('.sectionBody[data-section-body]');
+    drag = { type: 'item', el: itemRow, id: itemRow.dataset.itemId,
+      sectionId: body ? body.dataset.sectionBody : '', startY: e.clientY, dragging: false, pointerId: e.pointerId };
+  } else if (header && header.dataset.sectionId !== '__orphan__') {
+    drag = { type: 'section', el: header, id: header.dataset.sectionId, startY: e.clientY, dragging: false, pointerId: e.pointerId };
+  } else {
+    return;
+  }
+  moveDrag_ = drag;
+  if (drag.el.setPointerCapture) { try { drag.el.setPointerCapture(e.pointerId); } catch (err) {} }
+  window.addEventListener('pointermove', onMovePointerMove_, { passive: false });
+  window.addEventListener('pointerup', onMovePointerUp_);
+  window.addEventListener('pointercancel', onMovePointerUp_);
+}
+
+function onMovePointerMove_(e) {
+  if (!moveDrag_ || e.pointerId !== moveDrag_.pointerId) return;
+  if (!moveDrag_.dragging) {
+    if (Math.abs(e.clientY - moveDrag_.startY) < MOVE_THRESHOLD) return;
+    moveDrag_.dragging = true;
+    moveDrag_.el.classList.add('moveSource');
+  }
+  e.preventDefault();
+  clearDropMarks_();
+  const hit = document.elementFromPoint(e.clientX, e.clientY);
+  if (!hit) { moveDrag_.target = null; return; }
+  if (moveDrag_.type === 'item') {
+    const row = hit.closest('.itemRow[data-item-id]');
+    if (row && row !== moveDrag_.el) {
+      const rect = row.getBoundingClientRect();
+      const before = e.clientY < rect.top + rect.height / 2;
+      row.classList.add('dropMark', before ? 'dropBefore' : 'dropAfter');
+      moveDrag_.target = { row: row, before: before };
+    } else { moveDrag_.target = null; }
+  } else {
+    const header = hit.closest('.group.section[data-section-id]');
+    if (header && header !== moveDrag_.el && header.dataset.sectionId !== '__orphan__') {
+      const rect = header.getBoundingClientRect();
+      const before = e.clientY < rect.top + rect.height / 2;
+      header.classList.add('dropMark', before ? 'dropBefore' : 'dropAfter');
+      moveDrag_.target = { el: header, before: before };
+    } else { moveDrag_.target = null; }
+  }
+}
+
+function onMovePointerUp_(e) {
+  window.removeEventListener('pointermove', onMovePointerMove_);
+  window.removeEventListener('pointerup', onMovePointerUp_);
+  window.removeEventListener('pointercancel', onMovePointerUp_);
+  const drag = moveDrag_;
+  moveDrag_ = null;
+  clearDropMarks_();
+  if (drag && drag.el) drag.el.classList.remove('moveSource');
+  if (!drag || !drag.dragging || !drag.target) return;
+  if (drag.type === 'item') applyItemReorder_(drag); else applySectionReorder_(drag);
+}
+
+function persistSectionOrder_(sectionId) {
+  if (!sectionId || sectionId === '__orphan__') return; // orphan isn't a real section
+  call_('setSectionItemOrder', [sectionId, State.sectionItems[sectionId] || []])
+    .then(function () { setPill('ok', 'Saved'); })
+    .catch(function (e) { setPill('err', 'Error'); setBanner('warn', 'Reorder save failed: ' + (e.message || e)); });
+}
+
+function applyItemReorder_(drag) {
+  const targetRow = drag.target.row;
+  const targetId = targetRow.dataset.itemId;
+  const targetBody = targetRow.closest('.sectionBody[data-section-body]');
+  const targetSection = targetBody ? targetBody.dataset.sectionBody : '';
+  const srcSection = drag.sectionId;
+  if (!targetSection) return;
+
+  if (srcSection && State.sectionItems[srcSection]) {
+    State.sectionItems[srcSection] = State.sectionItems[srcSection].filter(function (x) { return x !== drag.id; });
+  }
+  const arr = State.sectionItems[targetSection] || (State.sectionItems[targetSection] = []);
+  let idx = arr.indexOf(targetId);
+  if (idx < 0) idx = arr.length;
+  arr.splice(drag.target.before ? idx : idx + 1, 0, drag.id);
+
+  setPill('pending', 'Saving…');
+  renderRows_();
+  if (srcSection !== targetSection) persistSectionOrder_(srcSection);
+  persistSectionOrder_(targetSection);
+}
+
+function applySectionReorder_(drag) {
+  const targetId = drag.target.el.dataset.sectionId;
+  let ids = State.sections.map(function (s) { return s.id; }).filter(function (x) { return x !== drag.id; });
+  let idx = ids.indexOf(targetId);
+  if (idx < 0) return;
+  ids.splice(drag.target.before ? idx : idx + 1, 0, drag.id);
+  const byId = {}; State.sections.forEach(function (s) { byId[s.id] = s; });
+  State.sections = ids.map(function (id) { return byId[id]; }).filter(Boolean);
+  State.sections.forEach(function (s, i) { s.sortOrder = i + 1; });
+  setPill('pending', 'Saving…');
+  renderRows_();
+  call_('reorderListItems', ['Sections', ids])
+    .then(function () { setPill('ok', 'Saved'); })
+    .catch(function (e) { setPill('err', 'Error'); setBanner('warn', 'Section reorder failed: ' + (e.message || e)); });
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  document.getElementById('moveToggle').addEventListener('click', toggleMove_);
+  document.getElementById('rows').addEventListener('pointerdown', onRowsPointerDown_);
+});
+</script>

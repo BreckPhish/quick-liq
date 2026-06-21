@@ -1,0 +1,85 @@
+<script>
+/* ===========================================================================
+ * Client_Orders — computed order guide grouped by distributor.
+ * Quantities come from the server (on-hand vs par), so this view always matches
+ * the latest counts and batch demand.
+ * =========================================================================== */
+
+function renderOrderGuide_() {
+  const body = document.getElementById('ordersBody');
+  const includeAtPar = document.getElementById('ordersIncludeAtPar').checked;
+  body.innerHTML = '<div class="muted">Calculating…</div>';
+  call_('getOrderGuide', [includeAtPar]).then(function (data) {
+    const groups = (data && data.groups) || [];
+    if (!groups.length) {
+      body.innerHTML = '<div class="muted">Nothing to order — everything is at or above par. '
+        + '(Toggle “Show items already at par” to see the full list.)</div>';
+      return;
+    }
+    body.innerHTML = groups.map(function (g) {
+      const rows = g.lines.map(function (l) {
+        const cases = l.suggestedCases > 0 ? ' <span class="muted">(' + l.suggestedCases + ' cs)</span>' : '';
+        const batchNote = l.batch > 0 ? '<div class="muted tiny">incl. ' + l.batch + ' batch</div>' : '';
+        return '<tr>'
+          + '<td>' + esc_(l.orderName) + '</td>'
+          + '<td class="num">' + l.onHand + batchNote + '</td>'
+          + '<td class="num">' + l.par + '</td>'
+          + '<td class="num order">' + (l.suggestedUnits || 0) + cases + '</td>'
+          + '</tr>';
+      }).join('');
+      return '<div class="orderGroup">'
+        + '<div class="orderVendor">' + esc_(g.vendorName) + ' <span class="muted">· ' + g.lines.length + ' item' + (g.lines.length === 1 ? '' : 's') + '</span></div>'
+        + orderVendorMeta_(g)
+        + '<table class="orderTable"><thead><tr><th>Item</th><th class="num">On hand</th><th class="num">Par</th><th class="num">Order</th></tr></thead>'
+        + '<tbody>' + rows + '</tbody></table>'
+        + '<button class="btn copyOrder" type="button" data-vendor="' + esc_(g.vendorName) + '">Copy order text</button>'
+        + '</div>';
+    }).join('');
+
+    body.querySelectorAll('.copyOrder').forEach(function (btn) {
+      btn.addEventListener('click', function () { copyOrderText_(btn.dataset.vendor, groups); });
+    });
+  }).catch(function (e) {
+    body.innerHTML = '<div class="banner err">Could not build order guide: ' + esc_(e && e.message ? e.message : e) + '</div>';
+  });
+}
+
+/** Distributor sub-header: reps, order-by days/note, order minimum vs estimated total. */
+function orderVendorMeta_(g) {
+  const bits = [];
+  (g.reps || []).forEach(function (r) {
+    const contact = [r.phone, r.email].filter(Boolean).join(' · ');
+    const who = [r.name, r.role].filter(Boolean).join(', ');
+    if (who || contact) bits.push('👤 ' + esc_([who, contact].filter(Boolean).join(' — ')));
+  });
+  if ((g.orderDays || []).length) bits.push('🗓 order by ' + esc_(g.orderDays.join(', ')));
+  if (g.orderNote) bits.push(esc_(g.orderNote));
+  let minLine = '';
+  if (g.minOrder > 0) {
+    const est = '$' + (Number(g.estTotal) || 0).toFixed(2);
+    const min = '$' + Number(g.minOrder).toFixed(2);
+    minLine = '<div class="orderMin' + (g.underMin ? ' under' : ' ok') + '">'
+      + 'Min order ' + min + ' · est. this order ' + est
+      + (g.underMin ? ' — under minimum' : ' — meets minimum') + '</div>';
+  }
+  if (!bits.length && !minLine) return '';
+  return '<div class="orderMeta muted">' + bits.join('<br>') + '</div>' + minLine;
+}
+
+function copyOrderText_(vendorName, groups) {
+  const g = groups.filter(function (x) { return x.vendorName === vendorName; })[0];
+  if (!g) return;
+  const lines = g.lines.map(function (l) { return l.suggestedUnits + ' x ' + l.orderName; });
+  const text = vendorName + ' ORDER\n' + lines.join('\n');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function () { setBanner('warn', 'Copied ' + vendorName + ' order to clipboard.'); setTimeout(function () { setBanner(null); }, 2500); });
+  } else {
+    window.prompt('Copy this order:', text);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  document.getElementById('ordersRefresh').addEventListener('click', renderOrderGuide_);
+  document.getElementById('ordersIncludeAtPar').addEventListener('change', renderOrderGuide_);
+});
+</script>

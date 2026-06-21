@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>TIN PLATE — INVENT</title>
+  <?!= include('Styles'); ?>
+</head>
+<body class="locked">
+
+  <!-- Launch PIN gate -->
+  <div id="launchOverlay" class="overlay launchOverlay" role="dialog" aria-modal="true" aria-labelledby="launchTitle">
+    <div class="modal launchModal">
+      <h2 id="launchTitle">APP ACCESS</h2>
+      <p class="muted">Enter the access PIN to continue.</p>
+      <input id="launchPin" class="pinInput" type="password" inputmode="numeric"
+             autocomplete="one-time-code" placeholder="••••" aria-label="Access PIN">
+      <div id="launchError" class="errorText" role="alert" aria-live="assertive"></div>
+      <button id="launchSubmit" class="btn primary" type="button">Unlock</button>
+    </div>
+  </div>
+
+  <!-- App -->
+  <header>
+    <div class="headerBar">
+      <div class="headerTitle">
+        <div class="companyName" id="companyName">TIN PLATE HOSPITALITY GROUP, LLC</div>
+        <div class="portalName" id="portalName">BEVERAGE MANAGEMENT PORTAL</div>
+      </div>
+      <div class="headerActions">
+        <button id="reportsBtn" class="btn" type="button">Reports</button>
+        <div id="savePill" class="pill" role="status" aria-live="polite">Idle</div>
+      </div>
+    </div>
+    <div class="headerRow">
+      <nav class="pageTabs" aria-label="Pages">
+        <button class="pageTabBtn active" type="button" data-page="inventory">Inventory</button>
+        <button class="pageTabBtn" type="button" data-page="orders">Order Guide</button>
+        <button class="pageTabBtn" type="button" data-page="recipes">Batch Recipes</button>
+        <button class="pageTabBtn" type="button" data-page="settings">Settings</button>
+      </nav>
+      <div class="metaFields">
+        <label class="metaField">Last counted
+          <input id="metaDate" type="date">
+        </label>
+        <label class="metaField">Initials
+          <input id="metaInitials" maxlength="3" autocapitalize="characters" placeholder="ABC">
+        </label>
+      </div>
+    </div>
+    <div id="banner" class="banner" hidden></div>
+  </header>
+
+  <!-- Inventory page -->
+  <main id="pageInventory" class="page active">
+    <div class="wrap">
+      <div class="invToolbar">
+        <button id="addItemBtn" class="btn primary" type="button">+ Add item</button>
+        <button id="moveToggle" class="btn" type="button">Move</button>
+        <span class="muted invHint">Tap a name to edit. Turn on <strong>Move</strong> to drag-reorder.</span>
+      </div>
+      <div id="rows" class="rows" aria-live="polite"></div>
+      <div id="status" class="status"></div>
+    </div>
+    <div class="bottomBar">
+      <div class="adjustControls" aria-label="Adjust selected field">
+        <button id="decBtn" class="btn adjustBtn" type="button" disabled aria-label="Decrease selected field">&minus;</button>
+        <button id="incBtn" class="btn adjustBtn" type="button" disabled aria-label="Increase selected field">+</button>
+      </div>
+      <input id="search" class="searchInput" type="search" placeholder="Search items…" aria-label="Search items">
+      <button id="clearSearch" class="btn" type="button">Clear</button>
+    </div>
+  </main>
+
+  <!-- Order Guide page -->
+  <main id="pageOrders" class="page">
+    <div class="wrap">
+      <div class="ordersHead">
+        <h2 class="pageHeading">Order Guide</h2>
+        <label class="toggleRow"><input id="ordersIncludeAtPar" type="checkbox"> Show items already at par</label>
+        <button id="ordersRefresh" class="btn" type="button">Refresh</button>
+      </div>
+      <p class="muted">Suggested orders are computed from on-hand totals (counts + batch demand)
+        against each item's par, grouped by distributor.</p>
+      <div id="ordersBody" class="ordersBody"></div>
+    </div>
+  </main>
+
+  <!-- Recipes page -->
+  <main id="pageRecipes" class="page">
+    <div class="wrap">
+      <div class="ordersHead">
+        <h2 class="pageHeading">Batch Cocktail Recipes</h2>
+        <button id="newRecipeBtn" class="btn primary" type="button">+ New recipe</button>
+      </div>
+      <p class="muted">Each recipe's on-hand batch bottles are converted to bottles of each base
+        liquor and folded into your counts and order guide.</p>
+      <div id="recipeList" class="recipeList"></div>
+    </div>
+  </main>
+
+  <!-- Recipe editor modal -->
+  <div id="recipeEditor" class="overlay" role="dialog" aria-modal="true" aria-labelledby="recipeEditorTitle">
+    <div class="modal recipeModal">
+      <h2 id="recipeEditorTitle">Batch Recipe</h2>
+      <label class="field">Name <input id="reName" type="text" placeholder="e.g. Negroni Batch"></label>
+      <div class="fieldRow">
+        <label class="field">Group
+          <select id="reGroup"></select>
+        </label>
+      </div>
+      <div class="fieldRow">
+        <label class="field">Yield amount <input id="reYieldAmt" type="text" inputmode="decimal" placeholder="5000"></label>
+        <label class="field">Unit <select id="reYieldUnit"></select></label>
+      </div>
+      <div class="fieldRow">
+        <label class="field">Batch bottle size <input id="reBottleAmt" type="text" inputmode="decimal" placeholder="750"></label>
+        <label class="field">Unit <select id="reBottleUnit"></select></label>
+      </div>
+      <label class="field">Bottles on hand <input id="reBottleCount" type="text" inputmode="decimal" placeholder="0"></label>
+
+      <div class="ingHead">
+        <strong>Ingredients</strong>
+        <button id="reAddIng" class="btn" type="button">+ Add ingredient</button>
+      </div>
+      <div id="reIngList" class="ingList"></div>
+      <div id="reError" class="errorText"></div>
+
+      <div class="modalActions">
+        <button id="reDelete" class="btn danger" type="button">Delete</button>
+        <span class="spacer"></span>
+        <button id="reCancel" class="btn" type="button">Cancel</button>
+        <button id="reSave" class="btn primary" type="button">Save recipe</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings page -->
+  <main id="pageSettings" class="page">
+    <div class="wrap">
+      <h2 class="pageHeading">Settings</h2>
+      <div id="settingsBody" class="settingsBody muted">Enter the settings PIN to manage configuration.</div>
+    </div>
+  </main>
+
+  <!-- Item editor modal -->
+  <div id="itemEditor" class="overlay" role="dialog" aria-modal="true" aria-labelledby="itemEditorTitle">
+    <div class="modal recipeModal">
+      <h2 id="itemEditorTitle">Item</h2>
+      <label class="field">Common name <input id="itName" type="text" placeholder="e.g. BUFFALO TRACE"></label>
+      <label class="field">Order name <input id="itOrderName" type="text" placeholder="(defaults to common name)"></label>
+      <div class="fieldRow">
+        <label class="field">Category <select id="itCategory"></select></label>
+        <label class="field">Distributor <select id="itVendor"></select></label>
+      </div>
+      <div class="fieldRow">
+        <label class="field">Bottle size <input id="itSizeAmt" type="text" inputmode="decimal" placeholder="750"></label>
+        <label class="field">Unit <select id="itSizeUnit"></select></label>
+      </div>
+      <div class="fieldRow">
+        <label class="field">Par <input id="itPar" type="text" inputmode="decimal" placeholder="0"></label>
+        <label class="field">Case size <input id="itCaseSize" type="text" inputmode="decimal" placeholder="0"></label>
+        <label class="field">Cost <input id="itCost" type="text" inputmode="decimal" placeholder="0.00"></label>
+      </div>
+      <label class="field">Section <select id="itSection"></select></label>
+      <label class="field">Notes <input id="itNotes" type="text"></label>
+      <div id="itError" class="errorText"></div>
+      <div class="modalActions">
+        <button id="itArchive" class="btn" type="button">Archive</button>
+        <button id="itDelete" class="btn danger" type="button">Delete</button>
+        <span class="spacer"></span>
+        <button id="itCancel" class="btn" type="button">Cancel</button>
+        <button id="itSave" class="btn primary" type="button">Save item</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Distributor editor modal -->
+  <div id="vendorEditor" class="overlay" role="dialog" aria-modal="true" aria-labelledby="venTitle">
+    <div class="modal recipeModal">
+      <h2 id="venTitle">Distributor</h2>
+      <label class="field">Name <input id="venName" type="text" placeholder="e.g. SOUTHERN"></label>
+      <div class="fieldRow">
+        <label class="field">Ref code <input id="venRef" type="text" maxlength="4" placeholder="A"></label>
+        <label class="field">Order minimum ($) <input id="venMinOrder" type="text" inputmode="decimal" placeholder="0.00"></label>
+        <label class="field toggleField"><span>Active</span><input id="venActive" type="checkbox" checked></label>
+      </div>
+      <div class="ingHead"><strong>Reps</strong><button id="venAddRep" class="btn" type="button">+ Add rep</button></div>
+      <div id="venReps" class="repList"></div>
+      <div class="field"><span class="fieldLabel">Order days (place order by)</span><div id="venDays" class="dayChips"></div></div>
+      <label class="field">Order-by note <input id="venOrderNote" type="text" placeholder="e.g. by 2pm the day before delivery"></label>
+      <div id="venError" class="errorText"></div>
+      <div class="modalActions">
+        <button id="venDelete" class="btn danger" type="button">Delete</button>
+        <span class="spacer"></span>
+        <button id="venCancel" class="btn" type="button">Cancel</button>
+        <button id="venSave" class="btn primary" type="button">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reports modal -->
+  <div id="reportsModal" class="overlay" role="dialog" aria-modal="true" aria-labelledby="reportsTitle">
+    <div class="modal recipeModal">
+      <h2 id="reportsTitle">Reports</h2>
+      <label class="toggleRow"><input id="rpInventory" type="checkbox" checked> Inventory count sheet</label>
+      <label class="toggleRow"><input id="rpOrder" type="checkbox"> Order guide</label>
+
+      <div class="ingHead"><strong>Download</strong></div>
+      <div class="modalActions" style="margin-top:8px;">
+        <button id="rpDownloadInv" class="btn" type="button">Inventory PDF</button>
+        <button id="rpDownloadOrder" class="btn" type="button">Order PDF</button>
+      </div>
+
+      <div class="ingHead"><strong>Email selected</strong></div>
+      <label class="field">Recipients <input id="rpRecipients" type="text" inputmode="email" placeholder="name@example.com, …"></label>
+      <label class="field">Subject <input id="rpSubject" type="text" value="Tin Plate — Beverage Report"></label>
+      <label class="field">Message <input id="rpBody" type="text" value="Reports attached."></label>
+      <div id="rpError" class="errorText"></div>
+      <div class="modalActions">
+        <span class="spacer"></span>
+        <button id="rpCancel" class="btn" type="button">Close</button>
+        <button id="rpSend" class="btn primary" type="button">Send email</button>
+      </div>
+    </div>
+  </div>
+
+  <?!= include('Client_Core'); ?>
+  <?!= include('Client_Render'); ?>
+  <?!= include('Client_Counting'); ?>
+  <?!= include('Client_Recipes'); ?>
+  <?!= include('Client_Orders'); ?>
+  <?!= include('Client_Items'); ?>
+  <?!= include('Client_Reports'); ?>
+  <?!= include('Client_Settings'); ?>
+  <?!= include('Client_Manage'); ?>
+  <?!= include('Client_Move'); ?>
+</body>
+</html>

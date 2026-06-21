@@ -1,0 +1,169 @@
+<script>
+/* ===========================================================================
+ * Client_Items — add / edit / archive / delete inventory items.
+ * Updates State locally after each mutation (no full reload), so counts and
+ * pending edits are preserved.
+ * =========================================================================== */
+
+let editingItemId_ = null;
+let editingItemOldSection_ = '';
+
+function selectOptions_(list, idKey, nameKey, selected, blankLabel) {
+  let html = blankLabel ? '<option value="">' + esc_(blankLabel) + '</option>' : '';
+  (list || []).forEach(function (o) {
+    const id = o[idKey], name = o[nameKey];
+    html += '<option value="' + esc_(id) + '"' + (String(id) === String(selected) ? ' selected' : '') + '>' + esc_(name) + '</option>';
+  });
+  return html;
+}
+
+/** First section id that currently contains this item (or ''). */
+function itemPrimarySection_(itemId) {
+  const map = State.sectionItems || {};
+  const keys = Object.keys(map);
+  for (let i = 0; i < keys.length; i++) {
+    if ((map[keys[i]] || []).indexOf(String(itemId)) !== -1) return keys[i];
+  }
+  return '';
+}
+
+function openItemEditor_(id, presetSectionId) {
+  editingItemId_ = id || null;
+  const it = id ? State.itemsById[String(id)] : null;
+  const cats = (State.data && State.data.categories) || [];
+  const vendors = (State.data && State.data.vendors) || [];
+
+  document.getElementById('itemEditorTitle').textContent = id ? 'Edit item' : 'Add item';
+  document.getElementById('itCategory').innerHTML = selectOptions_(cats, 'id', 'name', it ? it.categoryId : '', '— category —');
+  document.getElementById('itVendor').innerHTML = selectOptions_(vendors, 'id', 'name', it ? it.vendorId : '', '— distributor —');
+  document.getElementById('itSizeUnit').innerHTML = unitOptions_(it ? (normalizeUnitClient_(it.bottleSizeUnit) || 'ML') : 'ML');
+
+  editingItemOldSection_ = id ? itemPrimarySection_(id) : (presetSectionId || '');
+  document.getElementById('itSection').innerHTML =
+    selectOptions_(State.sections, 'id', 'name', editingItemOldSection_, '— no section —');
+
+  document.getElementById('itName').value = it ? it.commonName : '';
+  document.getElementById('itOrderName').value = it ? it.orderName : '';
+  document.getElementById('itSizeAmt').value = it ? it.bottleSizeAmount : '';
+  document.getElementById('itPar').value = it ? it.par : '';
+  document.getElementById('itCaseSize').value = it ? it.caseSize : '';
+  document.getElementById('itCost').value = it ? it.cost : '';
+  document.getElementById('itNotes').value = it ? it.notes : '';
+  document.getElementById('itError').textContent = '';
+
+  const archiveBtn = document.getElementById('itArchive');
+  archiveBtn.style.display = id ? '' : 'none';
+  archiveBtn.textContent = (it && truthy_(it.archived)) ? 'Unarchive' : 'Archive';
+  document.getElementById('itDelete').style.display = id ? '' : 'none';
+
+  document.getElementById('itemEditor').classList.add('show');
+}
+
+function closeItemEditor_() {
+  document.getElementById('itemEditor').classList.remove('show');
+  editingItemId_ = null;
+}
+
+function collectItemPayload_() {
+  return {
+    commonName: document.getElementById('itName').value,
+    orderName: document.getElementById('itOrderName').value,
+    categoryId: document.getElementById('itCategory').value,
+    vendorId: document.getElementById('itVendor').value,
+    bottleSizeAmount: document.getElementById('itSizeAmt').value,
+    bottleSizeUnit: document.getElementById('itSizeUnit').value,
+    par: document.getElementById('itPar').value,
+    caseSize: document.getElementById('itCaseSize').value,
+    cost: document.getElementById('itCost').value,
+    notes: document.getElementById('itNotes').value,
+  };
+}
+
+/** Apply a section move in local State (and on the server). */
+function applySectionMove_(itemId, oldSec, newSec) {
+  if (String(oldSec) === String(newSec)) return;
+  const map = State.sectionItems;
+  if (oldSec && map[oldSec]) {
+    map[oldSec] = map[oldSec].filter(function (x) { return String(x) !== String(itemId); });
+    call_('removeItemFromSection', [oldSec, itemId]).catch(function () {});
+  }
+  if (newSec) {
+    (map[newSec] || (map[newSec] = [])).push(String(itemId));
+    call_('addItemToSection', [newSec, itemId]).catch(function () {});
+  }
+}
+
+function saveItem_() {
+  const err = document.getElementById('itError');
+  const data = collectItemPayload_();
+  if (!String(data.commonName || '').trim()) { err.textContent = 'Common name is required.'; return; }
+  const newSection = document.getElementById('itSection').value;
+  const btn = document.getElementById('itSave');
+  btn.disabled = true; setPill('pending', 'Saving…');
+
+  const done = function (item) {
+    State.itemsById[String(item.id)] = item;
+    applySectionMove_(item.id, editingItemId_ ? editingItemOldSection_ : '', newSection);
+    btn.disabled = false;
+    closeItemEditor_();
+    renderRows_();
+    if (typeof onItemsChanged_ === 'function') onItemsChanged_();
+    setPill('ok', 'Saved');
+  };
+
+  if (editingItemId_) {
+    call_('updateItem', [editingItemId_, data]).then(function (res) {
+      if (res.batchContributions) State.batch = res.batchContributions;
+      done(res.item);
+    }).catch(function (e) { btn.disabled = false; err.textContent = 'Save failed: ' + (e.message || e); setPill('err', 'Error'); });
+  } else {
+    const payload = Object.assign({}, data, { sectionId: newSection || '' });
+    call_('createItem', [payload]).then(function (res) {
+      // createItem already placed it in the section server-side; reflect locally.
+      State.itemsById[String(res.item.id)] = res.item;
+      if (newSection) (State.sectionItems[newSection] || (State.sectionItems[newSection] = [])).push(String(res.item.id));
+      btn.disabled = false; closeItemEditor_(); renderRows_();
+      if (typeof onItemsChanged_ === 'function') onItemsChanged_();
+      setPill('ok', 'Saved');
+    }).catch(function (e) { btn.disabled = false; err.textContent = 'Save failed: ' + (e.message || e); setPill('err', 'Error'); });
+  }
+}
+
+function archiveItem_() {
+  if (!editingItemId_) return;
+  const it = State.itemsById[String(editingItemId_)];
+  const next = !(it && truthy_(it.archived));
+  setPill('pending', 'Saving…');
+  call_('archiveItem', [editingItemId_, next]).then(function (res) {
+    State.itemsById[String(res.item.id)] = res.item;
+    closeItemEditor_(); renderRows_();
+    if (typeof onItemsChanged_ === 'function') onItemsChanged_();
+    setPill('ok', 'Saved');
+  }).catch(function (e) { document.getElementById('itError').textContent = 'Failed: ' + (e.message || e); setPill('err', 'Error'); });
+}
+
+function deleteItem_() {
+  if (!editingItemId_) return;
+  if (!window.confirm('Permanently delete this item? This removes its counts and section placement.')) return;
+  const id = editingItemId_;
+  setPill('pending', 'Deleting…');
+  call_('deleteItem', [id]).then(function () {
+    delete State.itemsById[String(id)];
+    delete State.counts[String(id)];
+    Object.keys(State.sectionItems).forEach(function (sid) {
+      State.sectionItems[sid] = State.sectionItems[sid].filter(function (x) { return String(x) !== String(id); });
+    });
+    closeItemEditor_(); renderRows_();
+    if (typeof onItemsChanged_ === 'function') onItemsChanged_();
+    setPill('ok', 'Deleted');
+  }).catch(function (e) { document.getElementById('itError').textContent = 'Delete failed: ' + (e.message || e); setPill('err', 'Error'); });
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  document.getElementById('addItemBtn').addEventListener('click', function () { openItemEditor_(null, ''); });
+  document.getElementById('itSave').addEventListener('click', saveItem_);
+  document.getElementById('itCancel').addEventListener('click', closeItemEditor_);
+  document.getElementById('itArchive').addEventListener('click', archiveItem_);
+  document.getElementById('itDelete').addEventListener('click', deleteItem_);
+});
+</script>

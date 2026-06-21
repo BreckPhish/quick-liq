@@ -1,0 +1,215 @@
+<script>
+/* ===========================================================================
+ * Client_Render — sections/groups/rows, search filter, recipe summary.
+ * Rendering is pure-ish: it reads State and writes HTML, then Counting wires inputs.
+ * =========================================================================== */
+
+function esc_(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function locationLabelsHtml_() {
+  return State.locations.map(function (l) {
+    return '<div class="colLabel">' + esc_(l.name) + '</div>';
+  }).join('') + '<div class="colLabel calc">BATCH</div><div class="colLabel calc">TOTAL</div>';
+}
+
+/** Per-item on-hand total (location counts + batch), client-side. */
+function itemTotalClient_(counts, batch) {
+  let sum = Number(batch) || 0;
+  Object.keys(counts || {}).forEach(function (k) {
+    const n = parseFloat(counts[k]);
+    if (Number.isFinite(n)) sum += n;
+  });
+  return Math.round(sum * 10) / 10;
+}
+
+/** Format to ≤1 decimal, dropping a trailing .0. */
+function fmt1_(n) {
+  const v = Math.round((Number(n) || 0) * 10) / 10;
+  return (v % 1 === 0) ? String(v) : v.toFixed(1);
+}
+
+function itemMatches_(itemId, q) {
+  const it = State.itemsById[String(itemId)];
+  if (!it) return false;
+  if (!q) return true;
+  return String(it.commonName || '').toLowerCase().indexOf(q) !== -1;
+}
+
+function rowHtml_(itemId, zebra) {
+  const it = State.itemsById[String(itemId)];
+  if (!it) return '';
+  const counts = State.counts[String(itemId)] || {};
+  const batch = Number(State.batch[String(itemId)]) || 0;
+  let cells = '';
+  State.locations.forEach(function (loc) {
+    const v = counts[String(loc.id)];
+    cells += '<div class="cell"><input type="text" inputmode="decimal" enterkeyhint="next" '
+      + 'aria-label="' + esc_(it.commonName) + ' — ' + esc_(loc.name) + '" '
+      + 'data-item-id="' + esc_(itemId) + '" data-loc-id="' + esc_(loc.id) + '" '
+      + 'value="' + esc_(v == null ? '' : v) + '"></div>';
+  });
+  // Read-only BATCH (bottles tied up in batch recipes) + live TOTAL (locations + batch).
+  cells += '<div class="cell calc"><div class="calcVal batchVal" title="Bottles inside batch recipes">'
+    + (batch > 0 ? fmt1_(batch) : '—') + '</div></div>';
+  cells += '<div class="cell calc"><div class="calcVal totalVal" data-total-for="' + esc_(itemId) + '">'
+    + fmt1_(itemTotalClient_(counts, batch)) + '</div></div>';
+  return '<div class="itemRow' + (zebra ? ' zebra' : '') + (it.archived ? ' archived' : '') + '" '
+    + 'data-item-id="' + esc_(itemId) + '">'
+    + '<button type="button" class="itemName" title="' + esc_(it.commonName) + '" '
+    + 'aria-label="Edit ' + esc_(it.commonName) + '">' + esc_(it.commonName) + '</button>'
+    + cells + '</div>';
+}
+
+function sectionHtml_(sec, q, idsOverride) {
+  const all = idsOverride || State.sectionItems[String(sec.id)] || [];
+  const ids = all.filter(function (id) { return itemMatches_(id, q); });
+  if (q && !ids.length) return '';
+  const collapsed = !!State.collapsed[sec.id] && !q;
+  let body = '';
+  ids.forEach(function (id, i) { body += rowHtml_(id, i % 2 === 1); });
+  return '<div class="group section' + (collapsed ? ' collapsed' : '') + '" data-section-id="' + esc_(sec.id) + '" '
+    + 'role="button" tabindex="0" aria-expanded="' + (!collapsed) + '" '
+    + 'aria-label="' + esc_(sec.name) + ' section, ' + ids.length + ' items">'
+    + '<div class="gName"><span class="chev">▾</span><span class="gSecName">' + esc_(sec.name)
+    + '</span><span class="gCount">' + ids.length + '</span></div>'
+    + locationLabelsHtml_()
+    + '</div>'
+    + '<div class="sectionBody' + (collapsed ? ' collapsed' : '') + '" data-section-body="' + esc_(sec.id) + '">'
+    + (body || '<div class="muted" style="padding:8px 4px;font-size:12px;">No items.</div>')
+    + '</div>';
+}
+
+function renderRows_() {
+  const q = (document.getElementById('search').value || '').trim().toLowerCase();
+  const rowsEl = document.getElementById('rows');
+
+  // Group sections by groupId; render grouped first (in group order), then ungrouped.
+  const sectionsByGroup = {};
+  const ungrouped = [];
+  State.sections.forEach(function (sec) {
+    if (sec.groupId) (sectionsByGroup[String(sec.groupId)] || (sectionsByGroup[String(sec.groupId)] = [])).push(sec);
+    else ungrouped.push(sec);
+  });
+
+  let html = '';
+  State.groups.forEach(function (g) {
+    const secs = sectionsByGroup[String(g.id)] || [];
+    const inner = secs.map(function (s) { return sectionHtml_(s, q); }).join('');
+    if (!inner.trim()) return;
+    html += '<div class="groupDivider muted" style="margin:18px 0 4px;font-weight:900;letter-spacing:.4px;">'
+      + esc_(g.name) + '</div>' + inner;
+  });
+  ungrouped.forEach(function (s) { html += sectionHtml_(s, q); });
+
+  // Catch-all: any item not placed in a section (e.g. just created) stays visible.
+  const placed = {};
+  Object.keys(State.sectionItems).forEach(function (sid) {
+    (State.sectionItems[sid] || []).forEach(function (id) { placed[String(id)] = true; });
+  });
+  const orphans = Object.keys(State.itemsById).filter(function (id) { return !placed[String(id)]; });
+  if (orphans.length) {
+    html += sectionHtml_({ id: '__orphan__', name: '(Unsectioned)' }, q, orphans);
+  }
+
+  rowsEl.innerHTML = html || '<div class="muted">No items yet. Tap “+ Add item”.</div>';
+  setStatus_();
+  wireSectionToggles_();
+  wireCountInputs_();
+  wireItemNames_();
+  fitNames_();
+}
+
+/** Tap an item's name to open the item editor. */
+function wireItemNames_() {
+  document.querySelectorAll('#rows .itemName').forEach(function (el) {
+    el.addEventListener('click', function (e) {
+      if (State.moveMode) return;
+      e.stopPropagation();
+      const row = el.closest('.itemRow[data-item-id]');
+      if (row && typeof openItemEditor_ === 'function') openItemEditor_(row.dataset.itemId);
+    });
+  });
+}
+
+function setStatus_() {
+  const itemCount = Object.keys(State.itemsById).length;
+  document.getElementById('status').textContent =
+    'Loaded ' + itemCount + ' items across ' + State.sections.length + ' sections.';
+}
+
+/* ---- Section collapse ---- */
+function wireSectionToggles_() {
+  document.querySelectorAll('#rows .group.section').forEach(function (header) {
+    const toggle = function (e) {
+      if (State.moveMode) return;
+      if (e.target.closest('input')) return;
+      const id = header.dataset.sectionId;
+      State.collapsed[id] = !State.collapsed[id];
+      saveCollapsed_();
+      header.classList.toggle('collapsed', !!State.collapsed[id]);
+      header.setAttribute('aria-expanded', String(!State.collapsed[id]));
+      const body = document.querySelector('.sectionBody[data-section-body="' + cssEscape_(id) + '"]');
+      if (body) body.classList.toggle('collapsed', !!State.collapsed[id]);
+    };
+    header.addEventListener('click', toggle);
+    header.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(e); }
+    });
+  });
+}
+
+function cssEscape_(s) {
+  return (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/["\\]/g, '\\$&');
+}
+
+/* ---- Item-name auto-fit (single line) ---- */
+function fitNames_() {
+  const names = document.querySelectorAll('#rows .itemName');
+  names.forEach(function (el) { el.style.fontSize = ''; });
+  names.forEach(function (el) {
+    const cw = el.clientWidth, sw = el.scrollWidth;
+    if (cw > 0 && sw > cw + 1) {
+      // Keep names legible: shrink toward fit but never below 11px (ellipsis + title handle the rest).
+      const size = Math.max(11, Math.floor(14 * (cw / sw) * 0.96 * 100) / 100);
+      el.style.fontSize = size + 'px';
+    }
+  });
+}
+
+/* ---- Recipe summary (phase-1 read-only list) ---- */
+function renderRecipeList_() {
+  const el = document.getElementById('recipeList');
+  if (!el) return;
+  if (!State.recipes.length) { el.innerHTML = '<div class="muted">No batch recipes yet. Tap “+ New recipe”.</div>'; return; }
+  el.innerHTML = State.recipes.map(function (r) {
+    const ing = (r.ingredients || []).length;
+    return '<div class="recipeCard" data-recipe-id="' + esc_(r.id) + '">'
+      + '<div class="rName">' + esc_(r.name) + '</div>'
+      + '<div class="rMeta">' + (Math.round((Number(r.bottleCount) || 0) * 10) / 10).toFixed(1)
+      + ' bottles on hand · ' + ing + ' ingredient' + (ing === 1 ? '' : 's') + '</div>'
+      + '<button class="btn rEdit" type="button" data-recipe-id="' + esc_(r.id) + '">Edit</button>'
+      + '</div>';
+  }).join('');
+  el.querySelectorAll('.rEdit').forEach(function (btn) {
+    btn.addEventListener('click', function () { openRecipeEditor_(btn.dataset.recipeId); });
+  });
+}
+
+/* ---- Search ---- */
+(function () {
+  let t = null;
+  document.addEventListener('DOMContentLoaded', function () {
+    document.getElementById('search').addEventListener('input', function () {
+      clearTimeout(t); t = setTimeout(renderRows_, 140);
+    });
+    document.getElementById('clearSearch').addEventListener('click', function () {
+      document.getElementById('search').value = ''; renderRows_();
+    });
+    window.addEventListener('resize', fitNames_);
+  });
+})();
+</script>

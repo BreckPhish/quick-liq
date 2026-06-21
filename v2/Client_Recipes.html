@@ -1,0 +1,178 @@
+<script>
+/* ===========================================================================
+ * Client_Recipes — full batch-recipe editor (create / edit / delete).
+ * On save, the server returns refreshed recipes + batchContributions, so counts
+ * and the order guide immediately reflect the change.
+ * =========================================================================== */
+
+let editingRecipeId_ = null;
+
+function unitOptions_(selected) {
+  return ['ML', 'L', 'FL OZ'].map(function (u) {
+    return '<option value="' + u + '"' + (u === selected ? ' selected' : '') + '>' + u + '</option>';
+  }).join('');
+}
+
+function activeItemOptions_(selectedId) {
+  const items = Object.keys(State.itemsById).map(function (id) { return State.itemsById[id]; })
+    .filter(function (it) { return !truthy_(it.archived); })
+    .sort(function (a, b) { return String(a.commonName).localeCompare(String(b.commonName)); });
+  let opts = '<option value="">— choose inventory item —</option>';
+  items.forEach(function (it) {
+    const noSize = !it.bottleSizeAmount;
+    opts += '<option value="' + esc_(it.id) + '"' + (String(it.id) === String(selectedId) ? ' selected' : '')
+      + (noSize ? ' disabled' : '') + '>' + esc_(it.commonName) + (noSize ? ' (set bottle size first)' : '') + '</option>';
+  });
+  opts += '<option value="__custom__"' + (selectedId === '__custom__' ? ' selected' : '') + '>+ Custom ingredient…</option>';
+  return opts;
+}
+
+function ingredientRowHtml_(ing) {
+  ing = ing || { kind: 'inventory', itemId: '', name: '', amount: '', unit: 'ML' };
+  const isCustom = ing.kind === 'custom';
+  const sel = isCustom ? '__custom__' : (ing.itemId || '');
+  return '<div class="ingRow">'
+    + '<select class="ingItem">' + activeItemOptions_(sel) + '</select>'
+    + '<input class="ingName" type="text" placeholder="Custom name" value="' + esc_(ing.name || '') + '"'
+    + (isCustom ? '' : ' hidden') + '>'
+    + '<input class="ingAmt" type="text" inputmode="decimal" placeholder="amt" value="' + esc_(ing.amount == null ? '' : ing.amount) + '">'
+    + '<select class="ingUnit">' + unitOptions_(normalizeUnitClient_(ing.unit) || 'ML') + '</select>'
+    + '<button class="btn ingDel" type="button" aria-label="Remove ingredient">✕</button>'
+    + '</div>';
+}
+
+function normalizeUnitClient_(u) {
+  const raw = String(u || '').trim().toUpperCase().replace(/[.]/g, '').replace(/\s+/g, ' ');
+  if (raw === 'ML') return 'ML';
+  if (raw === 'L') return 'L';
+  if (raw === 'FL OZ' || raw === 'FLOZ' || raw === 'OZ') return 'FL OZ';
+  return '';
+}
+
+function wireIngRow_(row) {
+  const itemSel = row.querySelector('.ingItem');
+  const nameInput = row.querySelector('.ingName');
+  itemSel.addEventListener('change', function () {
+    nameInput.hidden = itemSel.value !== '__custom__';
+  });
+  row.querySelector('.ingDel').addEventListener('click', function () { row.remove(); });
+}
+
+function addIngredientRow_(ing) {
+  const list = document.getElementById('reIngList');
+  const wrap = document.createElement('div');
+  wrap.innerHTML = ingredientRowHtml_(ing);
+  const row = wrap.firstElementChild;
+  list.appendChild(row);
+  wireIngRow_(row);
+}
+
+function openRecipeEditor_(id) {
+  editingRecipeId_ = id || null;
+  const r = id ? State.recipes.filter(function (x) { return String(x.id) === String(id); })[0] : null;
+
+  // Group select
+  const groupSel = document.getElementById('reGroup');
+  groupSel.innerHTML = '<option value="">— no group —</option>' + State.groups.map(function (g) {
+    return '<option value="' + esc_(g.id) + '"' + (r && String(r.groupId) === String(g.id) ? ' selected' : '') + '>' + esc_(g.name) + '</option>';
+  }).join('');
+
+  document.getElementById('reName').value = r ? r.name : '';
+  document.getElementById('reYieldUnit').innerHTML = unitOptions_(r ? (normalizeUnitClient_(r.yieldUnit) || 'ML') : 'ML');
+  document.getElementById('reBottleUnit').innerHTML = unitOptions_(r ? (normalizeUnitClient_(r.bottleSizeUnit) || 'ML') : 'ML');
+  document.getElementById('reYieldAmt').value = r ? r.yieldAmount : '';
+  document.getElementById('reBottleAmt').value = r ? r.bottleSizeAmount : '';
+  document.getElementById('reBottleCount').value = r ? r.bottleCount : '';
+  document.getElementById('reError').textContent = '';
+
+  const list = document.getElementById('reIngList');
+  list.innerHTML = '';
+  const ings = (r && r.ingredients && r.ingredients.length) ? r.ingredients : [null];
+  ings.forEach(addIngredientRow_);
+
+  document.getElementById('reDelete').style.display = id ? '' : 'none';
+  document.getElementById('recipeEditor').classList.add('show');
+}
+
+function closeRecipeEditor_() {
+  document.getElementById('recipeEditor').classList.remove('show');
+  editingRecipeId_ = null;
+}
+
+function collectRecipePayload_() {
+  const ingredients = [];
+  document.querySelectorAll('#reIngList .ingRow').forEach(function (row) {
+    const itemVal = row.querySelector('.ingItem').value;
+    const amount = row.querySelector('.ingAmt').value;
+    const unit = row.querySelector('.ingUnit').value;
+    if (!itemVal && !row.querySelector('.ingName').value) return; // skip empty
+    if (itemVal === '__custom__') {
+      const name = row.querySelector('.ingName').value.trim();
+      if (!name) return;
+      ingredients.push({ kind: 'custom', name: name, amount: amount, unit: unit });
+    } else if (itemVal) {
+      ingredients.push({ kind: 'inventory', itemId: itemVal, amount: amount, unit: unit });
+    }
+  });
+  return {
+    id: editingRecipeId_ || undefined,
+    name: document.getElementById('reName').value,
+    groupId: document.getElementById('reGroup').value,
+    yieldAmount: document.getElementById('reYieldAmt').value,
+    yieldUnit: document.getElementById('reYieldUnit').value,
+    bottleSizeAmount: document.getElementById('reBottleAmt').value,
+    bottleSizeUnit: document.getElementById('reBottleUnit').value,
+    bottleCount: document.getElementById('reBottleCount').value,
+    ingredients: ingredients,
+  };
+}
+
+function saveRecipe_() {
+  const err = document.getElementById('reError');
+  const payload = collectRecipePayload_();
+  if (!String(payload.name || '').trim()) { err.textContent = 'Name is required.'; return; }
+  if (!(parseFloat(payload.yieldAmount) > 0)) { err.textContent = 'Yield amount must be greater than 0.'; return; }
+  if (!(parseFloat(payload.bottleSizeAmount) > 0)) { err.textContent = 'Batch bottle size must be greater than 0.'; return; }
+  if (!payload.ingredients.length) { err.textContent = 'Add at least one ingredient.'; return; }
+
+  const btn = document.getElementById('reSave');
+  btn.disabled = true; setPill('pending', 'Saving…');
+  call_('saveRecipe', [payload]).then(function (res) {
+    State.recipes = res.recipes || [];
+    State.batch = res.batchContributions || {};
+    btn.disabled = false;
+    closeRecipeEditor_();
+    renderRecipeList_();
+    renderRows_();         // batch chips refresh
+    setPill('ok', 'Saved');
+  }).catch(function (e) {
+    btn.disabled = false; err.textContent = 'Save failed: ' + (e && e.message ? e.message : e);
+    setPill('err', 'Error');
+  });
+}
+
+function deleteRecipe_() {
+  if (!editingRecipeId_) return;
+  if (!window.confirm('Delete this recipe?')) return;
+  setPill('pending', 'Deleting…');
+  call_('deleteRecipe', [editingRecipeId_]).then(function (res) {
+    State.recipes = res.recipes || [];
+    State.batch = res.batchContributions || {};
+    closeRecipeEditor_();
+    renderRecipeList_();
+    renderRows_();
+    setPill('ok', 'Deleted');
+  }).catch(function (e) {
+    document.getElementById('reError').textContent = 'Delete failed: ' + (e && e.message ? e.message : e);
+    setPill('err', 'Error');
+  });
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  document.getElementById('newRecipeBtn').addEventListener('click', function () { openRecipeEditor_(null); });
+  document.getElementById('reAddIng').addEventListener('click', function () { addIngredientRow_(null); });
+  document.getElementById('reSave').addEventListener('click', saveRecipe_);
+  document.getElementById('reCancel').addEventListener('click', closeRecipeEditor_);
+  document.getElementById('reDelete').addEventListener('click', deleteRecipe_);
+});
+</script>
