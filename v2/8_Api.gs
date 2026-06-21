@@ -12,8 +12,7 @@ function doGet() {
   tmpl.senderEmail = email;
   return tmpl.evaluate()
     .setTitle(APP.NAME)
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover');
 }
 
 /** Inline an HTML partial (Styles / client modules). */
@@ -112,7 +111,11 @@ function updateItem(id, data) {
   return api_(function () {
     assertAccess_();
     return withLock_(function () {
-      const item = new ItemsRepo().patch(id, data || {});
+      const patch = data || {};
+      if (Object.prototype.hasOwnProperty.call(patch, 'commonName') && !norm_(patch.commonName)) {
+        throw new Error('Common name is required.');
+      }
+      const item = new ItemsRepo().patch(id, patch);
       if (!item) throw new Error('Item not found: ' + id);
       return { item, batchContributions: computeBatchContributions_() };
     });
@@ -207,6 +210,9 @@ function saveRecipe(payload) {
         updatedAt: now,
       };
       if (!record.name) throw new Error('Recipe name is required.');
+      if (!(record.yieldAmount > 0)) throw new Error('Recipe yield must be greater than zero.');
+      if (!(record.bottleSizeAmount > 0)) throw new Error('Batch bottle size must be greater than zero.');
+      if (record.bottleCount < 0) throw new Error('Bottle count cannot be negative.');
       recipes.upsert(record);
       new RecipeIngredientsRepo().setForRecipe(id, payload.ingredients || []);
       return { recipes: RecipeIngredientsRepo.assembleAll(), batchContributions: computeBatchContributions_() };
@@ -218,7 +224,9 @@ function setRecipeBottleCount(id, bottleCount) {
   return api_(function () {
     assertAccess_();
     return withLock_(function () {
-      const updated = new RecipesRepo().update(id, { bottleCount: round_(num_(bottleCount, 0), 1), updatedAt: nowIso_() });
+      const count = round_(num_(bottleCount, 0), 1);
+      if (count < 0) throw new Error('Bottle count cannot be negative.');
+      const updated = new RecipesRepo().update(id, { bottleCount: count, updatedAt: nowIso_() });
       if (!updated) throw new Error('Recipe not found: ' + id);
       return { recipes: RecipeIngredientsRepo.assembleAll(), batchContributions: computeBatchContributions_() };
     });

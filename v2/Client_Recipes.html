@@ -15,7 +15,7 @@ function unitOptions_(selected) {
 
 function activeItemOptions_(selectedId) {
   const items = Object.keys(State.itemsById).map(function (id) { return State.itemsById[id]; })
-    .filter(function (it) { return !it.archived; })
+    .filter(function (it) { return !truthy_(it.archived); })
     .sort(function (a, b) { return String(a.commonName).localeCompare(String(b.commonName)); });
   let opts = '<option value="">— choose inventory item —</option>';
   items.forEach(function (it) {

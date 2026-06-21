@@ -33,7 +33,7 @@ class TableRepo {
     const lastCol = sheet.getLastColumn();
     const headers = lastCol >= 1 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(String) : [];
     const objects = [];
-    const rowIndexByKey = {};
+    const rowIndexByKey = Object.create(null); // null-proto: no inherited keys ('constructor' etc.)
     if (lastRow > 1 && lastCol >= 1) {
       const values = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
       for (let r = 0; r < values.length; r++) {

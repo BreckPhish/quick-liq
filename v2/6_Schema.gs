@@ -81,10 +81,17 @@ function ensureHeaders_(sheet, cols) {
  * Run once after adding the script to a Sheet (or anytime to repair structure).
  */
 function setup() {
-  return withLock_(function () {
-    Object.keys(TABLE_COLUMNS).forEach(function (name) { getOrCreateSheet_(name); });
+  return withLock_(function () { return setupCore_(); });
+}
 
-    seedSettingsDefaults_();
+/**
+ * Lock-free setup body. Call this (not setup()) when already inside a withLock_ critical
+ * section — LockService is non-reentrant, so nesting withLock_ would deadlock/throw.
+ */
+function setupCore_() {
+  Object.keys(TABLE_COLUMNS).forEach(function (name) { getOrCreateSheet_(name); });
+
+  seedSettingsDefaults_();
     seedIfEmpty_(SHEETS.LOCATIONS, function () {
       return DEFAULTS.LOCATIONS.map(function (l) {
         return { id: makeKey_(l.name), name: l.name, sortOrder: l.sortOrder, active: true };
@@ -110,7 +117,6 @@ function setup() {
     });
 
     return { ok: true, version: DEFAULTS.SCHEMA_VERSION };
-  });
 }
 
 /** Seed a table only when it has no data rows. */

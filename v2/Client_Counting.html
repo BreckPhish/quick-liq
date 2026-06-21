@@ -11,10 +11,21 @@ const FLUSH_RETRY_MAX = 60000;
 
 function pendKey_(itemId, locId) { return String(itemId) + '|' + String(locId); }
 
+function normalizePendingEdit_(e) {
+  const itemId = e && e.itemId != null ? String(e.itemId) : '';
+  const locationId = e && e.locationId != null ? String(e.locationId) : '';
+  const qty = Number(e && e.qty);
+  if (!itemId || !locationId || !Number.isFinite(qty)) return null;
+  return { itemId: itemId, locationId: locationId, qty: Math.max(0, qty) };
+}
+
 function loadPending_() {
   try {
     const raw = JSON.parse(localStorage.getItem(LS_PENDING) || '[]') || [];
-    raw.forEach(function (e) { State.pending.set(pendKey_(e.itemId, e.locationId), e); });
+    raw.forEach(function (e) {
+      const n = normalizePendingEdit_(e);
+      if (n) State.pending.set(pendKey_(n.itemId, n.locationId), n);
+    });
   } catch (e) {}
   updatePendingPill_();
 }
@@ -34,7 +45,7 @@ function recordEdit_(itemId, locId, value) {
   if (!State.counts[id]) State.counts[id] = {};
   const trimmed = String(value == null ? '' : value).trim();
   const num = trimmed === '' ? 0 : parseFloat(trimmed);
-  const qty = Number.isFinite(num) ? num : 0;
+  const qty = Number.isFinite(num) ? Math.max(0, num) : 0;
   if (qty === 0) delete State.counts[id][loc]; else State.counts[id][loc] = qty;
   updateRowTotal_(id);
 

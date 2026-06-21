@@ -62,7 +62,8 @@ class CountsRepo extends TableRepo {
   /** Set (or clear) one item/location count. Empty/0 qty removes the row. */
   setQty(itemId, locationId, qty) {
     const value = num_(qty, NaN);
-    if (!Number.isFinite(value) || value === 0) {
+    // Empty, zero, or negative clears the row (a count is never negative).
+    if (!Number.isFinite(value) || value <= 0) {
       this.remove(this.keyOf({ itemId: String(itemId), locationId: String(locationId) }));
       return { itemId, locationId, qty: 0 };
     }
@@ -104,10 +105,15 @@ class SectionItemsRepo extends TableRepo {
   }
 
   setOrder(sectionId, orderedItemIds) {
-    this.removeWhere((si) => String(si.sectionId) === String(sectionId));
-    this.insertMany(orderedItemIds.map((itemId, i) => ({
-      sectionId: String(sectionId), itemId: String(itemId), sortOrder: i + 1,
-    })));
+    const sid = String(sectionId);
+    const seen = Object.create(null);
+    const uniqueIds = (orderedItemIds || []).map(String).filter((itemId) => {
+      if (!itemId || seen[itemId]) return false;
+      seen[itemId] = true;
+      return true;
+    });
+    this.removeWhere((si) => String(si.sectionId) === sid);
+    this.insertMany(uniqueIds.map((itemId, i) => ({ sectionId: sid, itemId: itemId, sortOrder: i + 1 })));
   }
 }
 

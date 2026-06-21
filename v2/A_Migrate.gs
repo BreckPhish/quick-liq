@@ -24,7 +24,8 @@ const V1 = Object.freeze({
 function migrateFromV1(sourceSpreadsheetId) {
   if (!sourceSpreadsheetId) throw new Error('Pass the legacy spreadsheet id.');
   return withLock_(function () {
-    setup(); // ensure v2 tables exist + defaults seeded
+    assertAccess_(); // same gate as every other endpoint
+    setupCore_(); // ensure v2 tables exist + defaults seeded (lock-free: we already hold the lock)
     const src = SpreadsheetApp.openById(sourceSpreadsheetId);
 
     const summary = { items: 0, counts: 0, sections: 0, sectionItems: 0, groups: 0, recipes: 0, vendors: 0, archived: 0 };
@@ -161,8 +162,10 @@ function migrateFromV1(sourceSpreadsheetId) {
     if (countRows.length) new CountsRepo().insertMany(countRows);
     if (sectionItemRows.length) new SectionItemsRepo().insertMany(dedupeSectionItems_(sectionItemRows));
 
-    // Keep the numeric id counter ahead of any migrated id.
-    PropertiesService.getScriptProperties().setProperty(APP.PROP_NEXT_NUMERIC, String(maxNumericId + 1));
+    // Keep the numeric id counter ahead of any migrated id — never move it backward.
+    const props = PropertiesService.getScriptProperties();
+    const currentNext = num_(props.getProperty(APP.PROP_NEXT_NUMERIC), 0);
+    props.setProperty(APP.PROP_NEXT_NUMERIC, String(Math.max(currentNext, maxNumericId + 1)));
 
     /* ---- Groups ---- */
     const groups = readLegacyJson_(src, V1.SECTION_GROUPS, 'SECTION_GROUPS_JSON') || [];
@@ -219,10 +222,10 @@ function indexByNameLower_(records) {
 }
 
 function dedupeSectionItems_(rows) {
-  const seen = {};
+  const seen = Object.create(null);
   const out = [];
   rows.forEach(function (r) {
-    const k = String(r.sectionId) + '|' + String(r.itemId);
+    const k = JSON.stringify([String(r.sectionId), String(r.itemId)]); // collision-safe
     if (seen[k]) return;
     seen[k] = true; out.push(r);
   });

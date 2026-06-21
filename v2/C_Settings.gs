@@ -24,8 +24,9 @@ function getSettings() {
     return {
       uiText: s.get(SETTING_KEYS.UI_TEXT) || DEFAULTS.UI_TEXT,
       uiColors: s.get(SETTING_KEYS.UI_COLORS) || {},
-      launchPin: s.get(SETTING_KEYS.ACCESS_LAUNCH_PIN) || '',
-      settingsPin: s.get(SETTING_KEYS.ACCESS_SETTINGS_PIN) || '',
+      // Never ship raw PINs to the client; just whether one is set.
+      hasLaunchPin: !!norm_(s.get(SETTING_KEYS.ACCESS_LAUNCH_PIN) || ''),
+      hasSettingsPin: !!norm_(s.get(SETTING_KEYS.ACCESS_SETTINGS_PIN) || ''),
       allowedDomains: s.get(SETTING_KEYS.ACCESS_ALLOWED_DOMAINS) || [],
       lists: {
         Locations: new LocationsRepo().all().sort(function (a, b) { return num_(a.sortOrder) - num_(b.sortOrder); }),
@@ -46,8 +47,9 @@ function saveAppSettings(payload) {
       payload = payload || {};
       if (payload.uiText !== undefined) s.set(SETTING_KEYS.UI_TEXT, payload.uiText);
       if (payload.uiColors !== undefined) s.set(SETTING_KEYS.UI_COLORS, payload.uiColors);
-      if (payload.launchPin !== undefined) s.set(SETTING_KEYS.ACCESS_LAUNCH_PIN, String(payload.launchPin));
-      if (payload.settingsPin !== undefined) s.set(SETTING_KEYS.ACCESS_SETTINGS_PIN, String(payload.settingsPin));
+      // Blank = keep the current PIN (the client never receives the existing value).
+      if (norm_(payload.launchPin)) s.set(SETTING_KEYS.ACCESS_LAUNCH_PIN, String(payload.launchPin).trim());
+      if (norm_(payload.settingsPin)) s.set(SETTING_KEYS.ACCESS_SETTINGS_PIN, String(payload.settingsPin).trim());
       if (payload.allowedDomains !== undefined) {
         const list = Array.isArray(payload.allowedDomains) ? payload.allowedDomains
           : String(payload.allowedDomains).split(/[,\s]+/).filter(Boolean);

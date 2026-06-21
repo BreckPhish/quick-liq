@@ -18,10 +18,11 @@ function downloadBase64_(b64, mime, name) {
 }
 
 /** Ensure the server has the latest counts before generating a report. */
-function withFlushed_(fn) {
+function withFlushed_(fn, onError) {
   flushNowAsync_().then(fn).catch(function (e) {
     setPill('err', 'Error');
     document.getElementById('rpError').textContent = 'Could not save counts before report: ' + (e && e.message ? e.message : e);
+    if (onError) onError(e);
   });
 }
 
@@ -63,7 +64,7 @@ function sendReportEmail_() {
       btn.disabled = false; setPill('err', 'Error');
       err.textContent = 'Email failed: ' + (e && e.message ? e.message : e);
     });
-  });
+  }, function () { btn.disabled = false; });
 }
 
 document.addEventListener('DOMContentLoaded', function () {

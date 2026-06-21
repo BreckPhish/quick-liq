@@ -13,7 +13,8 @@ function assertAccess_() {
   if (!Array.isArray(domains) || domains.length === 0) return; // no restriction configured
   let email = '';
   try { email = String(Session.getActiveUser().getEmail() || ''); } catch (e) { email = ''; }
-  if (!email) return; // GAS could not resolve email; do not lock out
+  // Fail closed: a restriction is configured but we can't verify who this is.
+  if (!email) throw new Error('Access denied: could not verify your account for the domain restriction.');
   const ok = domains.some((d) => email.toLowerCase().endsWith('@' + String(d).toLowerCase()));
   if (!ok) throw new Error('Access denied: this account is not permitted to use INVENT.');
 }

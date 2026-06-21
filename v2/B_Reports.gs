@@ -43,23 +43,31 @@ function inventoryReport_() {
 
   const columns = ['Section', 'Item'].concat(locations.map(function (l) { return l.name; })).concat(['Batch', 'Total']);
   const rows = [];
+  const emitted = Object.create(null);
+
+  function pushItemRow(sectionName, itemId) {
+    const key = String(itemId);
+    const it = itemsById[key];
+    if (!it || bool_(it.archived) || emitted[key]) return;
+    emitted[key] = true;
+    const locQtys = counts[key] || {};
+    const b = batch[key] || 0;
+    const locVals = locations.map(function (l) { const q = locQtys[String(l.id)]; return q == null ? '' : q; });
+    rows.push([sectionName, it.commonName].concat(locVals)
+      .concat([b > 0 ? round_(b, 1) : '', itemTotal_(locQtys, b)]));
+  }
+
   sections.forEach(function (sec) {
-    (sectionItems[String(sec.id)] || []).forEach(function (itemId) {
-      const it = itemsById[String(itemId)];
-      if (!it || bool_(it.archived)) return;
-      const locQtys = counts[String(itemId)] || {};
-      const b = batch[String(itemId)] || 0;
-      const locVals = locations.map(function (l) { const q = locQtys[String(l.id)]; return q == null ? '' : q; });
-      rows.push([sec.name, it.commonName].concat(locVals)
-        .concat([b > 0 ? round_(b, 1) : '', itemTotal_(locQtys, b)]));
-    });
+    (sectionItems[String(sec.id)] || []).forEach(function (itemId) { pushItemRow(sec.name, itemId); });
   });
+  // Catch any active item with no section join (matches the UI's "(Unsectioned)" group).
+  items.forEach(function (it) { pushItemRow('(Unsectioned)', it.id); });
   return { title: 'Inventory', columns: columns, rows: rows };
 }
 
 /** Order report: a header row per distributor (reps / order-by / minimum) then its lines. */
 function orderReport_() {
-  const items = new ItemsRepo().all();
+  const items = new ItemsRepo().all().filter(function (it) { return !bool_(it.archived); });
   const itemsById = {}; items.forEach(function (it) { itemsById[String(it.id)] = it; });
   const vendorsById = {}; new VendorsRepo().all().forEach(function (v) { vendorsById[String(v.id)] = v; });
   const groups = buildOrderGuide_(items, onHandTotals_(), {});
@@ -123,6 +131,8 @@ function emailReports(payload) {
     const recipients = String(payload.recipients || '').split(/[,;\n]+/)
       .map(function (s) { return s.trim(); }).filter(Boolean);
     if (!recipients.length) throw new Error('At least one recipient is required.');
+    const bad = recipients.filter(function (r) { return !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r); });
+    if (bad.length) throw new Error('Invalid recipient address: ' + bad[0]);
     const attachments = [];
     if (payload.includeInventory) {
       const r = inventoryReport_(); attachments.push(exportTableToPdfBlob_('Inventory', r.columns, r.rows));

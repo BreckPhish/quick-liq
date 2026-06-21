@@ -53,7 +53,7 @@ function openItemEditor_(id, presetSectionId) {
 
   const archiveBtn = document.getElementById('itArchive');
   archiveBtn.style.display = id ? '' : 'none';
-  archiveBtn.textContent = (it && it.archived) ? 'Unarchive' : 'Archive';
+  archiveBtn.textContent = (it && truthy_(it.archived)) ? 'Unarchive' : 'Archive';
   document.getElementById('itDelete').style.display = id ? '' : 'none';
 
   document.getElementById('itemEditor').classList.add('show');
@@ -132,7 +132,7 @@ function saveItem_() {
 function archiveItem_() {
   if (!editingItemId_) return;
   const it = State.itemsById[String(editingItemId_)];
-  const next = !(it && it.archived);
+  const next = !(it && truthy_(it.archived));
   setPill('pending', 'Saving…');
   call_('archiveItem', [editingItemId_, next]).then(function (res) {
     State.itemsById[String(res.item.id)] = res.item;

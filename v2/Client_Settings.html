@@ -47,8 +47,8 @@ function renderSettingsPanels_(body, data) {
 function accessPanel_(d) {
   return '<div class="settingsCard"><h3>Access</h3>'
     + '<div class="fieldRow">'
-    + '<label class="field">Launch PIN <input id="setLaunchPin" type="text" value="' + esc_(d.launchPin) + '"></label>'
-    + '<label class="field">Settings PIN <input id="setSettingsPin" type="text" value="' + esc_(d.settingsPin) + '"></label>'
+    + '<label class="field">Launch PIN <input id="setLaunchPin" type="password" inputmode="numeric" autocomplete="new-password" placeholder="' + (d.hasLaunchPin ? '•••• — leave blank to keep' : 'not set') + '"></label>'
+    + '<label class="field">Settings PIN <input id="setSettingsPin" type="password" inputmode="numeric" autocomplete="new-password" placeholder="' + (d.hasSettingsPin ? '•••• — leave blank to keep' : 'not set') + '"></label>'
     + '</div>'
     + '<label class="field">Allowed email domains (comma-separated; blank = any signed-in user) '
     + '<input id="setDomains" type="text" value="' + esc_((d.allowedDomains || []).join(', ')) + '"></label>'
@@ -85,7 +85,8 @@ function wireSettingsPanels_(data) {
       companyName: document.getElementById('setCompany').value,
       portalName: document.getElementById('setPortal').value,
     });
-    saveSettings_({ uiText: uiText }, 'Appearance saved.').then(function () {
+    saveSettings_({ uiText: uiText }, 'Appearance saved.').then(function (ok) {
+      if (!ok) return;
       document.getElementById('companyName').textContent = uiText.companyName;
       document.getElementById('portalName').textContent = uiText.portalName;
     });
@@ -105,7 +106,8 @@ function saveSettings_(payload, okMsg) {
   return call_('saveAppSettings', [payload]).then(function () {
     setPill('ok', 'Saved');
     setBanner('warn', okMsg); setTimeout(function () { setBanner(null); }, 2500);
-  }).catch(function (e) { setPill('err', 'Error'); setBanner('err', e.message || e); });
+    return true;
+  }).catch(function (e) { setPill('err', 'Error'); setBanner('err', e.message || e); return false; });
 }
 
 /* ---- Data ops ---- */
@@ -131,7 +133,7 @@ function importBackup_(e) {
     document.getElementById('setDataMsg').textContent = 'Importing…';
     call_('importData', [payload]).then(function (res) {
       document.getElementById('setDataMsg').textContent = 'Restored ' + res.restored + ' rows.';
-      refreshData_(); renderSettings_();
+      refreshData_().then(renderSettings_);
     }).catch(function (err) { document.getElementById('setDataMsg').textContent = 'Import failed: ' + (err.message || err); });
   };
   reader.readAsText(file);
@@ -148,6 +150,7 @@ function runMigration_() {
     document.getElementById('setDataMsg').textContent =
       'Migrated: ' + s.items + ' items, ' + s.counts + ' counts, ' + s.sections + ' sections, '
       + s.recipes + ' recipes, ' + s.vendors + ' new vendors.';
-    refreshData_(); renderSettings_();
+    refreshData_().then(renderSettings_);
   }).catch(function (e) { document.getElementById('setDataMsg').textContent = 'Migration failed: ' + (e.message || e); });
 }
+</script>

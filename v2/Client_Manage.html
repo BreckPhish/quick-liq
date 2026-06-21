@@ -324,7 +324,12 @@ function saveVendor_() {
     .call(document.querySelectorAll('#venDays input:checked'))
     .map(function (c) { return c.value; });
   const reps = collectReps_();
-  const minOrder = document.getElementById('venMinOrder').value.replace(/[^0-9.]/g, '');
+  const minRaw = document.getElementById('venMinOrder').value.trim().replace(/[$,]/g, '');
+  const minVal = minRaw === '' ? '' : Number(minRaw);
+  if (minVal !== '' && (!Number.isFinite(minVal) || minVal < 0)) {
+    err.textContent = 'Minimum order must be a non-negative number.';
+    return;
+  }
   const rec = {
     name: name,
     ref: document.getElementById('venRef').value.trim(),
@@ -335,7 +340,7 @@ function saveVendor_() {
     repEmail: reps[0] ? reps[0].email : '',
     orderDaysJson: JSON.stringify(days),
     orderNote: document.getElementById('venOrderNote').value.trim(),
-    minOrder: minOrder === '' ? '' : parseFloat(minOrder),
+    minOrder: minVal,
     active: document.getElementById('venActive').checked,
   };
   if (editingVendorId_) rec.id = editingVendorId_; else rec.sheetName = name;
