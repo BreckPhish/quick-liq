@@ -129,6 +129,18 @@ function flushNowAsync_() {
 }
 
 /* ---- Wire inputs after each render ---- */
+function markSelected_(input) {
+  document.querySelectorAll('#rows input.selCell').forEach(function (el) { el.classList.remove('selCell'); });
+  if (input) input.classList.add('selCell');
+}
+
+/** Focus the next count input (next location, then next item) — fast keyboard/Tab-key flow. */
+function focusNextInput_(input) {
+  const all = Array.prototype.slice.call(document.querySelectorAll('#rows input[data-item-id]'));
+  const next = all[all.indexOf(input) + 1];
+  if (next) { next.focus(); next.select && next.select(); } else { input.blur(); }
+}
+
 function wireCountInputs_() {
   document.querySelectorAll('#rows input[data-item-id]').forEach(function (input) {
     input.addEventListener('input', function () {
@@ -136,7 +148,11 @@ function wireCountInputs_() {
     });
     input.addEventListener('focus', function () {
       State.selected = { itemId: input.dataset.itemId, locationId: input.dataset.locId, input: input };
+      markSelected_(input);
       updateAdjustButtons_();
+    });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); focusNextInput_(input); }
     });
   });
   updateAdjustButtons_();

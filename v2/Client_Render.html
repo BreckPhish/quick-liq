@@ -47,7 +47,8 @@ function rowHtml_(itemId, zebra) {
   let cells = '';
   State.locations.forEach(function (loc) {
     const v = counts[String(loc.id)];
-    cells += '<div class="cell"><input type="text" inputmode="decimal" '
+    cells += '<div class="cell"><input type="text" inputmode="decimal" enterkeyhint="next" '
+      + 'aria-label="' + esc_(it.commonName) + ' — ' + esc_(loc.name) + '" '
       + 'data-item-id="' + esc_(itemId) + '" data-loc-id="' + esc_(loc.id) + '" '
       + 'value="' + esc_(v == null ? '' : v) + '"></div>';
   });
@@ -58,7 +59,8 @@ function rowHtml_(itemId, zebra) {
     + fmt1_(itemTotalClient_(counts, batch)) + '</div></div>';
   return '<div class="itemRow' + (zebra ? ' zebra' : '') + (it.archived ? ' archived' : '') + '" '
     + 'data-item-id="' + esc_(itemId) + '">'
-    + '<div class="itemName" title="' + esc_(it.commonName) + '">' + esc_(it.commonName) + '</div>'
+    + '<button type="button" class="itemName" title="' + esc_(it.commonName) + '" '
+    + 'aria-label="Edit ' + esc_(it.commonName) + '">' + esc_(it.commonName) + '</button>'
     + cells + '</div>';
 }
 
@@ -69,10 +71,12 @@ function sectionHtml_(sec, q, idsOverride) {
   const collapsed = !!State.collapsed[sec.id] && !q;
   let body = '';
   ids.forEach(function (id, i) { body += rowHtml_(id, i % 2 === 1); });
-  return '<div class="group section' + (collapsed ? ' collapsed' : '') + '" data-section-id="' + esc_(sec.id) + '">'
-    + '<div class="gName"><span class="chev">▾</span> ' + esc_(sec.name) + '</div>'
-    + '<div class="groupLabels">' + locationLabelsHtml_() + '</div>'
-    + '<div class="gCount">' + ids.length + '</div>'
+  return '<div class="group section' + (collapsed ? ' collapsed' : '') + '" data-section-id="' + esc_(sec.id) + '" '
+    + 'role="button" tabindex="0" aria-expanded="' + (!collapsed) + '" '
+    + 'aria-label="' + esc_(sec.name) + ' section, ' + ids.length + ' items">'
+    + '<div class="gName"><span class="chev">▾</span><span class="gSecName">' + esc_(sec.name)
+    + '</span><span class="gCount">' + ids.length + '</span></div>'
+    + locationLabelsHtml_()
     + '</div>'
     + '<div class="sectionBody' + (collapsed ? ' collapsed' : '') + '" data-section-body="' + esc_(sec.id) + '">'
     + (body || '<div class="muted" style="padding:8px 4px;font-size:12px;">No items.</div>')
@@ -140,15 +144,20 @@ function setStatus_() {
 /* ---- Section collapse ---- */
 function wireSectionToggles_() {
   document.querySelectorAll('#rows .group.section').forEach(function (header) {
-    header.addEventListener('click', function (e) {
+    const toggle = function (e) {
       if (State.moveMode) return;
       if (e.target.closest('input')) return;
       const id = header.dataset.sectionId;
       State.collapsed[id] = !State.collapsed[id];
       saveCollapsed_();
       header.classList.toggle('collapsed', !!State.collapsed[id]);
+      header.setAttribute('aria-expanded', String(!State.collapsed[id]));
       const body = document.querySelector('.sectionBody[data-section-body="' + cssEscape_(id) + '"]');
       if (body) body.classList.toggle('collapsed', !!State.collapsed[id]);
+    };
+    header.addEventListener('click', toggle);
+    header.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(e); }
     });
   });
 }
@@ -164,7 +173,8 @@ function fitNames_() {
   names.forEach(function (el) {
     const cw = el.clientWidth, sw = el.scrollWidth;
     if (cw > 0 && sw > cw + 1) {
-      const size = Math.max(8, Math.floor(14 * (cw / sw) * 0.96 * 100) / 100);
+      // Keep names legible: shrink toward fit but never below 11px (ellipsis + title handle the rest).
+      const size = Math.max(11, Math.floor(14 * (cw / sw) * 0.96 * 100) / 100);
       el.style.fontSize = size + 'px';
     }
   });
