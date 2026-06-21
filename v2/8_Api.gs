@@ -257,14 +257,48 @@ function onHandTotals_() {
  * Computed order guide grouped by vendor.
  * @param {boolean} includeAtPar  also list items already at/above par
  */
+/** Normalize a vendor row into the rep/order/minimum metadata the order guide displays. */
+function vendorMeta_(v) {
+  if (!v) return { reps: [], orderDays: [], orderNote: '', minOrder: 0 };
+  let reps = parseJson_(v.repsJson, []);
+  if (!Array.isArray(reps)) reps = [];
+  // Fall back to the legacy single-rep columns when no reps list is stored.
+  if (!reps.length && (v.repName || v.repPhone || v.repEmail)) {
+    reps = [{ name: v.repName || '', phone: v.repPhone || '', email: v.repEmail || '', role: '' }];
+  }
+  let orderDays = parseJson_(v.orderDaysJson, []);
+  if (!Array.isArray(orderDays)) orderDays = [];
+  return { reps: reps, orderDays: orderDays, orderNote: String(v.orderNote || ''), minOrder: num_(v.minOrder, 0) };
+}
+
 function getOrderGuide(includeAtPar) {
   return api_(function () {
     assertAccess_();
     const items = new ItemsRepo().all();
-    const vendorName = {};
-    new VendorsRepo().all().forEach(function (v) { vendorName[String(v.id)] = v.name; });
+    const itemsById = {}; items.forEach(function (it) { itemsById[String(it.id)] = it; });
+    const vendorsById = {};
+    new VendorsRepo().all().forEach(function (v) { vendorsById[String(v.id)] = v; });
+    const batch = computeBatchContributions_();
+
     const groups = buildOrderGuide_(items, onHandTotals_(), { includeAtPar: !!includeAtPar });
-    groups.forEach(function (g) { g.vendorName = vendorName[g.vendorId] || g.vendorId || 'UNASSIGNED'; });
+    groups.forEach(function (g) {
+      const v = vendorsById[g.vendorId];
+      const meta = vendorMeta_(v);
+      g.vendorName = (v && v.name) || g.vendorId || 'UNASSIGNED';
+      g.reps = meta.reps;
+      g.orderDays = meta.orderDays;
+      g.orderNote = meta.orderNote;
+      g.minOrder = meta.minOrder;
+      // Per-line batch portion + estimated $ total for this distributor's suggested order.
+      let estTotal = 0;
+      g.lines.forEach(function (l) {
+        l.batch = round_(num_(batch[String(l.itemId)], 0), 1);
+        const cost = num_((itemsById[String(l.itemId)] || {}).cost, 0);
+        estTotal += cost * num_(l.suggestedUnits, 0);
+      });
+      g.estTotal = round_(estTotal, 2);
+      g.underMin = meta.minOrder > 0 && g.estTotal < meta.minOrder;
+    });
     groups.sort(function (a, b) { return String(a.vendorName).localeCompare(String(b.vendorName)); });
     return { groups: groups };
   });

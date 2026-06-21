@@ -75,16 +75,26 @@
   .group .gCount{ font-size:12px; color:var(--muted); }
   .group .chev{ transition:transform .15s ease; }
   .group.collapsed .chev{ transform:rotate(-90deg); }
-  .groupLabels{ display:grid; grid-template-columns:repeat(3,minmax(46px,0.72fr)); gap:8px; }
+  .groupLabels{
+    display:grid; gap:8px;
+    grid-template-columns:repeat(var(--locCount,3),minmax(40px,0.72fr)) minmax(38px,0.5fr) minmax(44px,0.6fr);
+  }
   .colLabel{ font-size:10px; color:var(--muted); font-weight:800; text-align:center; letter-spacing:0.3px; }
+  .colLabel.calc{ color:var(--accent); }
   .sectionBody.collapsed{ display:none; }
 
   /* ---- Item row ---- */
   .itemRow{
-    display:grid; grid-template-columns:minmax(0,3fr) repeat(var(--locCount,3), minmax(46px,0.72fr));
+    display:grid;
+    grid-template-columns:minmax(0,3fr) repeat(var(--locCount,3), minmax(40px,0.72fr)) minmax(38px,0.5fr) minmax(44px,0.6fr);
     gap:8px; align-items:center; background:var(--card2); border:1px solid var(--border);
     border-radius:12px; padding:8px 10px; margin-bottom:6px; position:relative;
   }
+  /* Read-only computed cells (BATCH / TOTAL). */
+  .cell.calc{ align-items:center; justify-content:center; }
+  .calcVal{ width:100%; text-align:center; font-size:14px; font-weight:800; padding:10px 2px; box-sizing:border-box; }
+  .calcVal.batchVal{ color:var(--warn); }
+  .calcVal.totalVal{ color:var(--text); }
   .itemRow.zebra{ background:#16253f; }
   .itemRow.archived{ opacity:0.5; }
   .itemName{
@@ -169,6 +179,11 @@
   .orderTable th.num, .orderTable td.num{ text-align:right; white-space:nowrap; }
   .orderTable td.order{ font-weight:900; color:var(--good); }
   .copyOrder{ margin-top:10px; }
+  .orderMeta{ font-size:12px; line-height:1.5; margin:2px 0 8px; }
+  .orderMin{ font-size:12px; font-weight:800; margin:2px 0 8px; padding:4px 8px; border-radius:8px; display:inline-block; }
+  .orderMin.ok{ color:var(--good); background:rgba(60,200,120,0.12); }
+  .orderMin.under{ color:#1a1300; background:var(--warn); }
+  .tiny{ font-size:10px; line-height:1.2; }
 
   /* ---- Recipe editor modal ---- */
   .recipeModal{ width:min(560px,94vw); max-height:88vh; overflow:auto; }
@@ -261,6 +276,16 @@
   .chip.off{ background:transparent; color:var(--muted); }
   .toggleField{ flex-direction:row !important; align-items:center; gap:8px; }
   .fieldLabel{ display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
+  .repList{ display:flex; flex-direction:column; gap:8px; margin-top:6px; }
+  .repRow{ display:grid; grid-template-columns:1fr 0.8fr 1fr 1.2fr auto; gap:6px; align-items:center; }
+  .repRow input{
+    background:rgba(255,255,255,0.06); border:1px solid var(--border); border-radius:8px;
+    color:var(--text); padding:8px; font-size:14px; min-width:0;
+  }
+  @media (max-width:560px){
+    .repRow{ grid-template-columns:1fr 1fr; }
+    .repRow .repDel{ grid-column:1 / -1; }
+  }
   .dayChips{ display:flex; flex-wrap:wrap; gap:6px; }
   .dayChip{
     display:inline-flex; align-items:center; gap:4px; font-size:13px;

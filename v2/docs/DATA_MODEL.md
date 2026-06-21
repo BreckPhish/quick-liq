@@ -36,6 +36,15 @@ Settings (key → JSON: ui, access, meta)
   values — no fragile `LET/VLOOKUP` injection.
 - **Access is configuration.** `Settings: access.allowedDomains / launchPin / settingsPin`
   — changeable without redeploying; empty domain list = open to any signed-in user.
+- **Distributors carry their own ops data.** `Vendors` holds `ref`, `active`, `orderDaysJson`
+  (the days an order must be placed), `orderNote` (free-text cutoff), `minOrder` (dollar
+  minimum), and `repsJson` (an array of `{name, role, phone, email}` — multiple reps).
+  Legacy single-rep columns (`repName/repPhone/repEmail`) are kept in sync with the first
+  rep for back-compat. The order guide shows reps, order-by days, and minimum vs. the
+  estimated order total (Σ suggested units × item cost), flagging orders under minimum.
+- **Batch bottles are surfaced, not hidden.** Live counting and the inventory PDF show a
+  read-only **BATCH** column (bottles tied up in batch recipes) and a **TOTAL** = locations +
+  batch; the order guide's on-hand includes batch and annotates the batch portion.
 
 ## Calculation contracts (see `3_BatchService.gs` + `9_Tests.gs`)
 

@@ -183,14 +183,13 @@
       <label class="field">Name <input id="venName" type="text" placeholder="e.g. SOUTHERN"></label>
       <div class="fieldRow">
         <label class="field">Ref code <input id="venRef" type="text" maxlength="4" placeholder="A"></label>
+        <label class="field">Order minimum ($) <input id="venMinOrder" type="text" inputmode="decimal" placeholder="0.00"></label>
         <label class="field toggleField"><span>Active</span><input id="venActive" type="checkbox" checked></label>
       </div>
-      <label class="field">Rep name <input id="venRepName" type="text" placeholder="contact name"></label>
-      <div class="fieldRow">
-        <label class="field">Rep phone <input id="venRepPhone" type="tel" placeholder="(555) 555-5555"></label>
-        <label class="field">Rep email <input id="venRepEmail" type="email" placeholder="rep@example.com"></label>
-      </div>
-      <div class="field"><span class="fieldLabel">Order days</span><div id="venDays" class="dayChips"></div></div>
+      <div class="ingHead"><strong>Reps</strong><button id="venAddRep" class="btn" type="button">+ Add rep</button></div>
+      <div id="venReps" class="repList"></div>
+      <div class="field"><span class="fieldLabel">Order days (place order by)</span><div id="venDays" class="dayChips"></div></div>
+      <label class="field">Order-by note <input id="venOrderNote" type="text" placeholder="e.g. by 2pm the day before delivery"></label>
       <div id="venError" class="errorText"></div>
       <div class="modalActions">
         <button id="venDelete" class="btn danger" type="button">Delete</button>

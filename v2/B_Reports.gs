@@ -57,17 +57,34 @@ function inventoryReport_() {
   return { title: 'Inventory', columns: columns, rows: rows };
 }
 
-/** Order report: one row per suggested order, grouped (sorted) by distributor. */
+/** Order report: a header row per distributor (reps / order-by / minimum) then its lines. */
 function orderReport_() {
   const items = new ItemsRepo().all();
-  const vendorName = {}; new VendorsRepo().all().forEach(function (v) { vendorName[String(v.id)] = v.name; });
+  const itemsById = {}; items.forEach(function (it) { itemsById[String(it.id)] = it; });
+  const vendorsById = {}; new VendorsRepo().all().forEach(function (v) { vendorsById[String(v.id)] = v; });
   const groups = buildOrderGuide_(items, onHandTotals_(), {});
+  groups.forEach(function (g) { g.vendorName = (vendorsById[g.vendorId] && vendorsById[g.vendorId].name) || g.vendorId || 'UNASSIGNED'; });
+  groups.sort(function (a, b) { return String(a.vendorName).localeCompare(String(b.vendorName)); });
+
   const columns = ['Distributor', 'Item', 'On hand', 'Par', 'Order', 'Cases'];
   const rows = [];
   groups.forEach(function (g) {
-    const vn = vendorName[g.vendorId] || g.vendorId || 'UNASSIGNED';
+    const meta = vendorMeta_(vendorsById[g.vendorId]);
+    let est = 0;
+    g.lines.forEach(function (l) { est += num_((itemsById[String(l.itemId)] || {}).cost, 0) * num_(l.suggestedUnits, 0); });
+    const metaBits = [];
+    meta.reps.forEach(function (r) {
+      const c = [r.name, r.phone, r.email].filter(Boolean).join(' ');
+      if (c) metaBits.push('Rep: ' + c);
+    });
+    if (meta.orderDays.length) metaBits.push('Order by: ' + meta.orderDays.join(', '));
+    if (meta.orderNote) metaBits.push(meta.orderNote);
+    if (meta.minOrder > 0) {
+      metaBits.push('Min $' + meta.minOrder.toFixed(2) + ' (est $' + est.toFixed(2) + (est < meta.minOrder ? ' — UNDER' : '') + ')');
+    }
+    rows.push([g.vendorName, metaBits.join('  ·  '), '', '', '', '']);
     g.lines.forEach(function (l) {
-      rows.push([vn, l.orderName, l.onHand, l.par, l.suggestedUnits, l.suggestedCases || '']);
+      rows.push(['', l.orderName, l.onHand, l.par, l.suggestedUnits, l.suggestedCases || '']);
     });
   });
   return { title: 'Order Guide', columns: columns, rows: rows };

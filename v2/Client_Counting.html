@@ -36,11 +36,21 @@ function recordEdit_(itemId, locId, value) {
   const num = trimmed === '' ? 0 : parseFloat(trimmed);
   const qty = Number.isFinite(num) ? num : 0;
   if (qty === 0) delete State.counts[id][loc]; else State.counts[id][loc] = qty;
+  updateRowTotal_(id);
 
   State.pending.set(pendKey_(id, loc), { itemId: id, locationId: loc, qty: qty });
   persistPending_();
   updatePendingPill_();
   scheduleFlush_();
+}
+
+/** Recompute and repaint the live TOTAL cell for an item (locations + batch). */
+function updateRowTotal_(itemId) {
+  const el = document.querySelector('.totalVal[data-total-for="' + cssEscape_(String(itemId)) + '"]');
+  if (!el) return;
+  const counts = State.counts[String(itemId)] || {};
+  const batch = Number(State.batch[String(itemId)]) || 0;
+  el.textContent = fmt1_(itemTotalClient_(counts, batch));
 }
 
 function scheduleFlush_() {

@@ -26,7 +26,7 @@ const TABLE_COLUMNS = Object.freeze({
     'headingAlign', 'columnsJson', 'createdAt'],
 
   [SHEETS.VENDORS]: ['id', 'name', 'ref', 'repName', 'repPhone', 'repEmail',
-    'orderDaysJson', 'sheetName', 'active'],
+    'orderDaysJson', 'sheetName', 'active', 'repsJson', 'minOrder', 'orderNote'],
 
   [SHEETS.CATEGORIES]: ['id', 'name', 'sortOrder'],
 
@@ -98,7 +98,8 @@ function setup() {
     seedIfEmpty_(SHEETS.VENDORS, function () {
       return DEFAULTS.VENDORS.map(function (name, i) {
         return { id: makeKey_(name), name: name, ref: String.fromCharCode(65 + i),
-          repName: '', repPhone: '', repEmail: '', orderDaysJson: '[]', sheetName: name, active: true };
+          repName: '', repPhone: '', repEmail: '', orderDaysJson: '[]', sheetName: name, active: true,
+          repsJson: '[]', minOrder: '', orderNote: '' };
       });
     });
     seedIfEmpty_(SHEETS.SECTIONS, function () {

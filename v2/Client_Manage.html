@@ -61,17 +61,34 @@ function itemsManagerCard_() {
     + '<div id="mItemList" class="mgrList"></div></div>';
 }
 
+/** Reps for a vendor row, falling back to the legacy single-rep columns. */
+function parseReps_(v) {
+  let reps = [];
+  try { reps = JSON.parse((v && v.repsJson) || '[]'); } catch (e) { reps = []; }
+  if (!Array.isArray(reps)) reps = [];
+  if (!reps.length && v && (v.repName || v.repPhone || v.repEmail)) {
+    reps = [{ name: v.repName || '', phone: v.repPhone || '', email: v.repEmail || '', role: '' }];
+  }
+  return reps;
+}
+
 function vendorsManagerCard_(vendors) {
   const counts = itemsCountByField_('vendorId');
   const rows = (vendors || []).map(function (v) {
     const days = parseDays_(v.orderDaysJson);
-    const rep = [v.repName, v.repPhone, v.repEmail].filter(Boolean).join(' · ');
+    const reps = parseReps_(v);
+    const repTxt = reps.length
+      ? (reps[0].name || reps[0].phone || reps[0].email) + (reps.length > 1 ? ' +' + (reps.length - 1) + ' more' : '')
+      : 'no rep on file';
+    const mo = parseFloat(v.minOrder);
+    const minTxt = (Number.isFinite(mo) && mo > 0) ? ' · min $' + (mo % 1 === 0 ? mo : mo.toFixed(2)) : '';
     return '<div class="mgrRow" data-id="' + esc_(v.id) + '">'
       + '<div class="mgrMain"><strong>' + esc_(v.name) + '</strong>'
       + (v.ref ? ' <span class="chip">' + esc_(v.ref) + '</span>' : '')
       + (truthy_(v.active) ? '' : ' <span class="chip off">inactive</span>')
-      + '<div class="muted small">' + (rep ? esc_(rep) : 'no rep on file')
+      + '<div class="muted small">' + esc_(repTxt)
         + (days.length ? (' · orders ' + esc_(days.join(', '))) : '')
+        + esc_(minTxt)
         + ' · ' + (counts[String(v.id)] || 0) + ' items</div>'
       + '</div><button class="btn vEdit" type="button">Edit</button></div>';
   }).join('');
@@ -242,16 +259,49 @@ function onItemsChanged_() {
 
 let editingVendorId_ = null;
 
+function repRowHtml_(r) {
+  r = r || {};
+  return '<div class="repRow">'
+    + '<input class="repName" type="text" placeholder="Rep name" value="' + esc_(r.name || '') + '">'
+    + '<input class="repRole" type="text" placeholder="Role" value="' + esc_(r.role || '') + '">'
+    + '<input class="repPhone" type="tel" placeholder="Phone" value="' + esc_(r.phone || '') + '">'
+    + '<input class="repEmail" type="email" placeholder="Email" value="' + esc_(r.email || '') + '">'
+    + '<button class="btn danger repDel" type="button" aria-label="Remove rep">✕</button></div>';
+}
+
+function addRepRow_(r) {
+  const host = document.getElementById('venReps');
+  const tmp = document.createElement('div');
+  tmp.innerHTML = repRowHtml_(r);
+  const row = tmp.firstChild;
+  host.appendChild(row);
+  row.querySelector('.repDel').addEventListener('click', function () { row.remove(); });
+}
+
+function collectReps_() {
+  return Array.prototype.slice.call(document.querySelectorAll('#venReps .repRow')).map(function (row) {
+    return {
+      name: row.querySelector('.repName').value.trim(),
+      role: row.querySelector('.repRole').value.trim(),
+      phone: row.querySelector('.repPhone').value.trim(),
+      email: row.querySelector('.repEmail').value.trim(),
+    };
+  }).filter(function (r) { return r.name || r.phone || r.email || r.role; });
+}
+
 function openVendorEditor_(id) {
   editingVendorId_ = id || null;
   const v = id ? (((State.data && State.data.vendors) || []).filter(function (x) { return String(x.id) === String(id); })[0] || {}) : {};
   document.getElementById('venTitle').textContent = id ? 'Edit distributor' : 'Add distributor';
   document.getElementById('venName').value = v.name || '';
   document.getElementById('venRef').value = v.ref || '';
-  document.getElementById('venRepName').value = v.repName || '';
-  document.getElementById('venRepPhone').value = v.repPhone || '';
-  document.getElementById('venRepEmail').value = v.repEmail || '';
+  document.getElementById('venMinOrder').value = (v.minOrder == null || v.minOrder === '') ? '' : v.minOrder;
+  document.getElementById('venOrderNote').value = v.orderNote || '';
   document.getElementById('venActive').checked = id ? truthy_(v.active) : true;
+  const reps = parseReps_(v);
+  const host = document.getElementById('venReps');
+  host.innerHTML = '';
+  (reps.length ? reps : [{}]).forEach(addRepRow_);
   const days = parseDays_(v.orderDaysJson);
   document.getElementById('venDays').innerHTML = DAY_LABELS.map(function (d) {
     return '<label class="dayChip"><input type="checkbox" value="' + d + '"' + (days.indexOf(d) !== -1 ? ' checked' : '') + '> ' + d + '</label>';
@@ -273,13 +323,19 @@ function saveVendor_() {
   const days = Array.prototype.slice
     .call(document.querySelectorAll('#venDays input:checked'))
     .map(function (c) { return c.value; });
+  const reps = collectReps_();
+  const minOrder = document.getElementById('venMinOrder').value.replace(/[^0-9.]/g, '');
   const rec = {
     name: name,
     ref: document.getElementById('venRef').value.trim(),
-    repName: document.getElementById('venRepName').value.trim(),
-    repPhone: document.getElementById('venRepPhone').value.trim(),
-    repEmail: document.getElementById('venRepEmail').value.trim(),
+    repsJson: JSON.stringify(reps),
+    // Keep the legacy single-rep columns in sync with the first rep for back-compat.
+    repName: reps[0] ? reps[0].name : '',
+    repPhone: reps[0] ? reps[0].phone : '',
+    repEmail: reps[0] ? reps[0].email : '',
     orderDaysJson: JSON.stringify(days),
+    orderNote: document.getElementById('venOrderNote').value.trim(),
+    minOrder: minOrder === '' ? '' : parseFloat(minOrder),
     active: document.getElementById('venActive').checked,
   };
   if (editingVendorId_) rec.id = editingVendorId_; else rec.sheetName = name;
@@ -310,5 +366,6 @@ document.addEventListener('DOMContentLoaded', function () {
   document.getElementById('venSave').addEventListener('click', saveVendor_);
   document.getElementById('venCancel').addEventListener('click', closeVendorEditor_);
   document.getElementById('venDelete').addEventListener('click', deleteVendor_);
+  document.getElementById('venAddRep').addEventListener('click', function () { addRepRow_({}); });
 });
 </script>

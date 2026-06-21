@@ -13,7 +13,23 @@ function esc_(s) {
 function locationLabelsHtml_() {
   return State.locations.map(function (l) {
     return '<div class="colLabel">' + esc_(l.name) + '</div>';
-  }).join('');
+  }).join('') + '<div class="colLabel calc">BATCH</div><div class="colLabel calc">TOTAL</div>';
+}
+
+/** Per-item on-hand total (location counts + batch), client-side. */
+function itemTotalClient_(counts, batch) {
+  let sum = Number(batch) || 0;
+  Object.keys(counts || {}).forEach(function (k) {
+    const n = parseFloat(counts[k]);
+    if (Number.isFinite(n)) sum += n;
+  });
+  return Math.round(sum * 10) / 10;
+}
+
+/** Format to ≤1 decimal, dropping a trailing .0. */
+function fmt1_(n) {
+  const v = Math.round((Number(n) || 0) * 10) / 10;
+  return (v % 1 === 0) ? String(v) : v.toFixed(1);
 }
 
 function itemMatches_(itemId, q) {
@@ -28,9 +44,6 @@ function rowHtml_(itemId, zebra) {
   if (!it) return '';
   const counts = State.counts[String(itemId)] || {};
   const batch = Number(State.batch[String(itemId)]) || 0;
-  const batchChip = batch > 0
-    ? '<span class="batchChip" title="Bottles tied up in batch recipes">+' + (Math.round(batch * 10) / 10).toFixed(1) + ' batch</span>'
-    : '';
   let cells = '';
   State.locations.forEach(function (loc) {
     const v = counts[String(loc.id)];
@@ -38,9 +51,14 @@ function rowHtml_(itemId, zebra) {
       + 'data-item-id="' + esc_(itemId) + '" data-loc-id="' + esc_(loc.id) + '" '
       + 'value="' + esc_(v == null ? '' : v) + '"></div>';
   });
+  // Read-only BATCH (bottles tied up in batch recipes) + live TOTAL (locations + batch).
+  cells += '<div class="cell calc"><div class="calcVal batchVal" title="Bottles inside batch recipes">'
+    + (batch > 0 ? fmt1_(batch) : '—') + '</div></div>';
+  cells += '<div class="cell calc"><div class="calcVal totalVal" data-total-for="' + esc_(itemId) + '">'
+    + fmt1_(itemTotalClient_(counts, batch)) + '</div></div>';
   return '<div class="itemRow' + (zebra ? ' zebra' : '') + (it.archived ? ' archived' : '') + '" '
     + 'data-item-id="' + esc_(itemId) + '">'
-    + '<div class="itemName" title="' + esc_(it.commonName) + '">' + esc_(it.commonName) + batchChip + '</div>'
+    + '<div class="itemName" title="' + esc_(it.commonName) + '">' + esc_(it.commonName) + '</div>'
     + cells + '</div>';
 }
 
