@@ -52,6 +52,10 @@
   <!-- Inventory page -->
   <main id="pageInventory" class="page active">
     <div class="wrap">
+      <div class="invToolbar">
+        <button id="addItemBtn" class="btn primary" type="button">+ Add item</button>
+        <span class="muted invHint">Tap an item's name to edit it.</span>
+      </div>
       <div id="rows" class="rows" aria-live="polite"></div>
       <div id="status" class="status"></div>
     </div>
@@ -136,10 +140,43 @@
     </div>
   </main>
 
+  <!-- Item editor modal -->
+  <div id="itemEditor" class="overlay" role="dialog" aria-modal="true" aria-labelledby="itemEditorTitle">
+    <div class="modal recipeModal">
+      <h2 id="itemEditorTitle">Item</h2>
+      <label class="field">Common name <input id="itName" type="text" placeholder="e.g. BUFFALO TRACE"></label>
+      <label class="field">Order name <input id="itOrderName" type="text" placeholder="(defaults to common name)"></label>
+      <div class="fieldRow">
+        <label class="field">Category <select id="itCategory"></select></label>
+        <label class="field">Distributor <select id="itVendor"></select></label>
+      </div>
+      <div class="fieldRow">
+        <label class="field">Bottle size <input id="itSizeAmt" type="text" inputmode="decimal" placeholder="750"></label>
+        <label class="field">Unit <select id="itSizeUnit"></select></label>
+      </div>
+      <div class="fieldRow">
+        <label class="field">Par <input id="itPar" type="text" inputmode="decimal" placeholder="0"></label>
+        <label class="field">Case size <input id="itCaseSize" type="text" inputmode="decimal" placeholder="0"></label>
+        <label class="field">Cost <input id="itCost" type="text" inputmode="decimal" placeholder="0.00"></label>
+      </div>
+      <label class="field">Section <select id="itSection"></select></label>
+      <label class="field">Notes <input id="itNotes" type="text"></label>
+      <div id="itError" class="errorText"></div>
+      <div class="modalActions">
+        <button id="itArchive" class="btn" type="button">Archive</button>
+        <button id="itDelete" class="btn danger" type="button">Delete</button>
+        <span class="spacer"></span>
+        <button id="itCancel" class="btn" type="button">Cancel</button>
+        <button id="itSave" class="btn primary" type="button">Save item</button>
+      </div>
+    </div>
+  </div>
+
   <?!= include('Client_Core'); ?>
   <?!= include('Client_Render'); ?>
   <?!= include('Client_Counting'); ?>
   <?!= include('Client_Recipes'); ?>
   <?!= include('Client_Orders'); ?>
+  <?!= include('Client_Items'); ?>
 </body>
 </html>

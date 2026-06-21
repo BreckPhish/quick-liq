@@ -89,7 +89,13 @@
   .itemRow.archived{ opacity:0.5; }
   .itemName{
     font-weight:800; font-size:14px; text-align:right; white-space:nowrap;
-    overflow:hidden; text-overflow:ellipsis; min-width:0;
+    overflow:hidden; text-overflow:ellipsis; min-width:0; cursor:pointer;
+  }
+  .invToolbar{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
+  .invHint{ font-size:12px; }
+  .batchChip{
+    display:inline-block; margin-left:6px; padding:1px 6px; border-radius:999px;
+    font-size:10px; font-weight:800; color:#1a1300; background:var(--warn); vertical-align:middle;
   }
   .cell{ display:flex; flex-direction:column; gap:4px; min-width:0; }
   .cell input{

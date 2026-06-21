@@ -154,8 +154,9 @@ v2/
 - **Phase 2 ✅:** full batch-recipe editor UI (create/edit/delete + ingredients), and a
   **computed** order guide (`OrderingService`, grouped by distributor) — order quantities
   are derived in code from on-hand vs par, replacing v1's `LET/VLOOKUP` formula injection.
-- **Phase 2.5 (next):** distributor management UI (vendor CRUD, rep/order-day config),
-  item add/edit modal, section/group editing + drag reorder.
+- **Phase 2.5 (in progress):** ✅ item add/edit/archive/delete modal (tap a name to edit;
+  "+ Add item"; section placement; "(Unsectioned)" catch-all so no item is ever hidden).
+  Next: distributor/vendor CRUD UI, section/group create + drag reorder.
 - **Phase 3:** PDF export + email + print layout.
 - **Phase 4:** customization (labels/colors/layout), import/export, **v1 → v2 migration**.
 - **Phase 5:** PWA manifest + service worker, multi-device sync hardening.

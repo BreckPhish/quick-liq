@@ -44,8 +44,9 @@ function rowHtml_(itemId, zebra) {
     + cells + '</div>';
 }
 
-function sectionHtml_(sec, q) {
-  const ids = (State.sectionItems[String(sec.id)] || []).filter(function (id) { return itemMatches_(id, q); });
+function sectionHtml_(sec, q, idsOverride) {
+  const all = idsOverride || State.sectionItems[String(sec.id)] || [];
+  const ids = all.filter(function (id) { return itemMatches_(id, q); });
   if (q && !ids.length) return '';
   const collapsed = !!State.collapsed[sec.id] && !q;
   let body = '';
@@ -82,11 +83,33 @@ function renderRows_() {
   });
   ungrouped.forEach(function (s) { html += sectionHtml_(s, q); });
 
-  rowsEl.innerHTML = html || '<div class="muted">No items.</div>';
+  // Catch-all: any item not placed in a section (e.g. just created) stays visible.
+  const placed = {};
+  Object.keys(State.sectionItems).forEach(function (sid) {
+    (State.sectionItems[sid] || []).forEach(function (id) { placed[String(id)] = true; });
+  });
+  const orphans = Object.keys(State.itemsById).filter(function (id) { return !placed[String(id)]; });
+  if (orphans.length) {
+    html += sectionHtml_({ id: '__orphan__', name: '(Unsectioned)' }, q, orphans);
+  }
+
+  rowsEl.innerHTML = html || '<div class="muted">No items yet. Tap “+ Add item”.</div>';
   setStatus_();
   wireSectionToggles_();
   wireCountInputs_();
+  wireItemNames_();
   fitNames_();
+}
+
+/** Tap an item's name to open the item editor. */
+function wireItemNames_() {
+  document.querySelectorAll('#rows .itemName').forEach(function (el) {
+    el.addEventListener('click', function (e) {
+      e.stopPropagation();
+      const row = el.closest('.itemRow[data-item-id]');
+      if (row && typeof openItemEditor_ === 'function') openItemEditor_(row.dataset.itemId);
+    });
+  });
 }
 
 function setStatus_() {
